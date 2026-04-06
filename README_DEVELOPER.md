@@ -306,10 +306,10 @@ tank = {
 - +100 damage per bullet
 - Location: tank_server.py:1486-1487
 
-**Laser Beam** 🔴 (3 seconds)
+**Laser Beam** 🔴 (1 seconds)
 - Instant kill any tank in laser path
 - Damages snake: 100 HP every 0.5s
-- Range: 1500 pixels
+- Range: 800 pixels
 - Width: 50 pixels
 - Location: tank_server.py:813-906
 

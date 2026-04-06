@@ -131,10 +131,10 @@ SUPER_POWERUP_DURATION = 6  # seconds super power-up lasts
 SNAKE_INTERVAL = 30  # seconds between snake spawns
 SNAKE_CELL_SIZE = 30  # Size of one cell (same as tank size)
 SNAKE_WIDTH_CELLS = 3  # Width in cells
-SNAKE_LENGTH_CELLS = 13  # Length in cells
+SNAKE_LENGTH_CELLS = 26  # Length in cells
 SNAKE_WIDTH = SNAKE_CELL_SIZE * SNAKE_WIDTH_CELLS  # 90 pixels wide
 SNAKE_LENGTH = SNAKE_CELL_SIZE * SNAKE_LENGTH_CELLS  # 390 pixels long
-SNAKE_SPEED = 5  # Speed of snake movement
+SNAKE_SPEED = 15  # Speed of snake movement
 
 # Shield power-up constants
 SHIELD_DROP_INTERVAL = 10  # seconds between shield drops
@@ -145,8 +145,8 @@ SKILL_COOLDOWN = 30  # seconds cooldown (starts after skill ends)
 SKILL_SPEED_DEMON_DURATION = 4  # seconds
 SKILL_SPEED_DEMON_SPEED_MULT = 5.0  # 400% increase = 5x speed
 SKILL_SPEED_DEMON_DAMAGE_BONUS = 100  # +100 damage per bullet
-SKILL_LASER_BEAM_DURATION = 3  # seconds
-SKILL_LASER_RANGE = 1500  # Laser reach distance
+SKILL_LASER_BEAM_DURATION = 1  # seconds
+SKILL_LASER_RANGE = 800  # Laser reach distance
 SKILL_GHOST_MODE_DURATION = 5  # seconds
 
 # Colors for different players
