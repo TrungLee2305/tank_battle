@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  tank-battle:
+    build: .
+    container_name: tank-battle-game
+    ports:
+      - "8051:8051"
+    environment:
+      - PORT=8051
+      - FLASK_ENV=production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8051/', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - tank-battle-network
+
+networks:
+  tank-battle-network:
+    driver: bridge

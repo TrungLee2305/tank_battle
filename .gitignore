@@ -1,0 +1,113 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.pytest_cache/
+
+# Type checking
+.mypy_cache/
+.pyre/
+.pytype/
+
+# Environments
+.env
+.env.*
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# =========================
+# Logs
+# =========================
+*.log
+logs/
+
+# =========================
+# IDE / Editor
+# =========================
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Docker
+# =========================
+# Ignore Docker runtime files
+*.pid
+*.seed
+*.pid.lock
+
+# Docker Compose override (local only)
+docker-compose.override.yml
+
+# Environment files for Docker
+.env.docker
+
+# Ignore local volumes / data
+docker-data/
+data/
+tmp/
+
+# =========================
+# Secrets
+# =========================
+*.pem
+*.key
+*.crt
+secrets/

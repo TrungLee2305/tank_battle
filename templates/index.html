@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TrungLe Tank Battle - Welcome</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="game-container">
+        <div id="header">
+            <h1>TrungLe Tank Battle - Welcome</h1>
+            <div id="connection-status" class="disconnected">Connecting...</div>
+        </div>
+
+        <div id="main-content">
+            <div id="game-area">
+                <canvas id="game-canvas" width="1440" height="840"></canvas>
+
+                <div id="welcome-screen" class="overlay">
+                    <div class="modal">
+                        <h2>Welcome to Tank Battle!</h2>
+                        <p>Enter your name to join the battle</p>
+                        <input type="text" id="player-name" placeholder="Your name" maxlength="15" autocomplete="off">
+
+                        <div class="customization-section">
+                            <h3>Customize Your Tank:</h3>
+
+                            <div class="color-selection">
+                                <label for="tank-color">Tank Color:</label>
+                                <input type="color" id="tank-color" value="#32CD32">
+                            </div>
+
+                            <div class="icon-selection">
+                                <label>Tank Icon:</label>
+                                <div class="icon-grid">
+                                    <label class="icon-option">
+                                        <input type="radio" name="tank-icon" value="⭐" checked>
+                                        <span class="icon-display">⭐</span>
+                                    </label>
+                                    <label class="icon-option">
+                                        <input type="radio" name="tank-icon" value="🔥">
+                                        <span class="icon-display">🔥</span>
+                                    </label>
+                                    <label class="icon-option">
+                                        <input type="radio" name="tank-icon" value="💎">
+                                        <span class="icon-display">💎</span>
+                                    </label>
+                                    <label class="icon-option">
+                                        <input type="radio" name="tank-icon" value="⚡">
+                                        <span class="icon-display">⚡</span>
+                                    </label>
+                                    <label class="icon-option">
+                                        <input type="radio" name="tank-icon" value="👑">
+                                        <span class="icon-display">👑</span>
+                                    </label>
+                                    <label class="icon-option">
+                                        <input type="radio" name="tank-icon" value="🎯">
+                                        <span class="icon-display">🎯</span>
+                                    </label>
+                                    <label class="icon-option">
+                                        <input type="radio" name="tank-icon" value="💀">
+                                        <span class="icon-display">💀</span>
+                                    </label>
+                                    <label class="icon-option">
+                                        <input type="radio" name="tank-icon" value="🌟">
+                                        <span class="icon-display">🌟</span>
+                                    </label>
+                                    <label class="icon-option">
+                                        <input type="radio" name="tank-icon" value="🚀">
+                                        <span class="icon-display">🚀</span>
+                                    </label>
+                                    <label class="icon-option">
+                                        <input type="radio" name="tank-icon" value="🎮">
+                                        <span class="icon-display">🎮</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="skill-selection">
+                            <h3>Select Ultimate Ability:</h3>
+                            <div class="skill-options">
+                                <label class="skill-option">
+                                    <input type="radio" name="skill" value="speed_demon" checked>
+                                    <div class="skill-card">
+                                        <div class="skill-icon">⚡</div>
+                                        <strong>Speed Demon</strong>
+                                        <p class="skill-desc">+400% Speed<br>+100 Bullet Damage</p>
+                                        <p class="skill-cooldown">4s Duration • 30s CD</p>
+                                    </div>
+                                </label>
+                                <label class="skill-option">
+                                    <input type="radio" name="skill" value="laser_beam">
+                                    <div class="skill-card">
+                                        <div class="skill-icon">🔴</div>
+                                        <strong>Laser Beam</strong>
+                                        <p class="skill-desc">Instant Kill Laser<br>Unlimited Fire</p>
+                                        <p class="skill-cooldown">3s Duration • 30s CD</p>
+                                    </div>
+                                </label>
+                                <label class="skill-option">
+                                    <input type="radio" name="skill" value="ghost_mode">
+                                    <div class="skill-card">
+                                        <div class="skill-icon">👻</div>
+                                        <strong>Ghost Mode</strong>
+                                        <p class="skill-desc">Phase Through Walls<br>Total Invincibility</p>
+                                        <p class="skill-cooldown">5s Duration • 30s CD</p>
+                                    </div>
+                                </label>
+                            </div>
+                            <p class="skill-hint">Press 'C' to activate your ultimate ability in battle!</p>
+                        </div>
+
+                        <div class="mode-selection">
+                            <h3>Select Game Mode:</h3>
+                            <div class="mode-options">
+                                <label class="mode-option">
+                                    <input type="radio" name="game-mode" value="ffa" checked>
+                                    <div class="mode-card">
+                                        <strong>Free-for-All</strong>
+                                        <p>Every player for themselves</p>
+                                        <p class="mode-desc">⚔️ Classic Battle Royale</p>
+                                    </div>
+                                </label>
+                                <label class="mode-option">
+                                    <input type="radio" name="game-mode" value="duel">
+                                    <div class="mode-card">
+                                        <strong>Duel</strong>
+                                        <p>Red vs Blue teams (max 5 each)</p>
+                                        <p class="mode-desc">🏰 Destroy enemy base or reach 50 kills</p>
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="map-selection">
+                            <h3>Select Map Type:</h3>
+                            <div class="map-options">
+                                <label class="map-option">
+                                    <input type="radio" name="map-type" value="basic">
+                                    <div class="map-card">
+                                        <strong>Basic</strong>
+                                        <p>1-2 walls, 1-2 bushes</p>
+                                        <p class="map-diff">⚡ Fast & Simple</p>
+                                    </div>
+                                </label>
+                                <label class="map-option">
+                                    <input type="radio" name="map-type" value="advanced" checked>
+                                    <div class="map-card">
+                                        <strong>Advanced</strong>
+                                        <p>3-4 walls, 2-3 bushes</p>
+                                        <p class="map-diff">⚔️ Balanced</p>
+                                    </div>
+                                </label>
+                                <label class="map-option">
+                                    <input type="radio" name="map-type" value="maze">
+                                    <div class="map-card">
+                                        <strong>Maze</strong>
+                                        <p>7-8 walls, 4-5 bushes</p>
+                                        <p class="map-diff">🎯 Tactical</p>
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+
+                        <button id="join-button" class="btn-primary">Join Battle</button>
+                        <div class="controls-info">
+                            <h3>Controls:</h3>
+                            <p><strong>WASD</strong> - Move your tank</p>
+                            <p><strong>Mouse</strong> - Aim turret</p>
+                            <p><strong>Click / Space</strong> - Shoot</p>
+                            <p><strong>Bushes</strong> - Hide to become invisible!</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="death-screen" class="overlay" style="display: none;">
+                    <div class="modal">
+                        <h2>You Were Destroyed!</h2>
+                        <p id="killed-by">Killed by: Unknown</p>
+                        <p id="final-score">Score: 0</p>
+                        <p id="final-kd">K/D: 0/0</p>
+                        <button id="respawn-button" class="btn-primary">Respawn</button>
+                    </div>
+                </div>
+
+                <div id="game-over-screen" class="overlay" style="display: none;">
+                    <div class="modal">
+                        <h2 id="game-over-title">GAME OVER</h2>
+                        <div id="game-over-content">
+                            <p id="winning-team" style="font-size: 32px; font-weight: bold; margin: 20px 0;"></p>
+                            <p id="win-reason" style="font-size: 18px; margin: 15px 0;"></p>
+                            <div id="final-team-scores" style="margin: 20px 0; font-size: 16px;">
+                                <div style="color: #FF0000; margin: 5px 0;">Red Team: <span id="final-red-kills">0</span> kills</div>
+                                <div style="color: #0000FF; margin: 5px 0;">Blue Team: <span id="final-blue-kills">0</span> kills</div>
+                            </div>
+                        </div>
+                        <button id="game-over-ok" class="btn-primary">Continue Playing</button>
+                    </div>
+                </div>
+
+                <div id="crosshair"></div>
+            </div>
+
+            <div id="sidebar">
+                <div class="panel">
+                    <h3>Your Stats</h3>
+                    <div class="stat">
+                        <span class="stat-label">Health:</span>
+                        <div class="health-bar-container">
+                            <div id="my-health-bar" class="health-bar" style="width: 100%"></div>
+                            <span id="my-health-text" class="health-text">100/100</span>
+                        </div>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Score:</span>
+                        <span id="my-score" class="stat-value">0</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Kills:</span>
+                        <span id="my-kills" class="stat-value">0</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Deaths:</span>
+                        <span id="my-deaths" class="stat-value">0</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Status:</span>
+                        <span id="my-status" class="stat-value">-</span>
+                    </div>
+                </div>
+
+                <div class="panel" id="skill-panel">
+                    <h3>Ultimate Ability</h3>
+                    <div id="skill-display">
+                        <div id="skill-info">
+                            <span id="skill-name">-</span>
+                            <span id="skill-icon">-</span>
+                        </div>
+                        <div id="skill-status">
+                            <div id="skill-progress-bar">
+                                <div id="skill-progress-fill"></div>
+                                <span id="skill-progress-text">Press C to activate</span>
+                            </div>
+                        </div>
+                        <p id="skill-hint">Press 'C' to activate</p>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <h3>Leaderboard</h3>
+                    <div id="leaderboard">
+                        <p class="no-players">No players yet</p>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <h3>Players Online</h3>
+                    <div id="players-count">0 players</div>
+                </div>
+            </div>
+        </div>
+
+        <div id="footer">
+            <p>WASD to move • Mouse to aim • Click/Space to shoot • Destroy enemy tanks!</p>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="/static/game.js"></script>
+</body>
+</html>
