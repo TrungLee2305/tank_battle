@@ -1416,8 +1416,21 @@ def update_skills():
     current_time = time.time()
 
     for player_id, tank in players.items():
+        # Cancel laser preparation if tank died
+        if tank.get('laser_preparing', False) and not tank['alive']:
+            tank['laser_preparing'] = False
+            tank['laser_preparation_end'] = 0
+            print(f'❌ {tank["name"]}\'s laser preparation cancelled - tank died!')
+
+        # Cancel bomb preparation if tank died
+        if tank.get('bomb_preparing', False) and not tank['alive']:
+            tank['bomb_preparing'] = False
+            tank['bomb_preparation_end'] = 0
+            tank['has_atomic_bomb'] = False  # Drop the bomb
+            print(f'❌ {tank["name"]}\'s bomb preparation cancelled - tank died!')
+
         # Handle laser beam preparation phase
-        if tank.get('laser_preparing', False) and current_time >= tank['laser_preparation_end']:
+        if tank.get('laser_preparing', False) and tank['alive'] and current_time >= tank['laser_preparation_end']:
             # Preparation complete, activate laser firing
             tank['laser_preparing'] = False
             tank['skill_active'] = True
@@ -1437,7 +1450,7 @@ def update_skills():
             print(f'✅ {tank["name"]} laser cooldown complete - movement restored')
 
         # Handle atomic bomb preparation phase
-        if tank.get('bomb_preparing', False) and current_time >= tank['bomb_preparation_end']:
+        if tank.get('bomb_preparing', False) and tank['alive'] and current_time >= tank['bomb_preparation_end']:
             # Preparation complete, DETONATE!
             tank['bomb_preparing'] = False
             tank['has_atomic_bomb'] = False  # Consume the bomb
@@ -2335,6 +2348,23 @@ def update_bullets(current_time):
                         tank['has_atomic_bomb'] = False
                         print(f'💣 {tank["name"]} dropped atomic bomb on death!')
 
+                    # Cancel any active preparation states
+                    if tank.get('laser_preparing', False):
+                        tank['laser_preparing'] = False
+                        tank['laser_preparation_end'] = 0
+                        print(f'❌ {tank["name"]}\'s laser preparation cancelled by death!')
+
+                    if tank.get('bomb_preparing', False):
+                        tank['bomb_preparing'] = False
+                        tank['bomb_preparation_end'] = 0
+                        print(f'❌ {tank["name"]}\'s bomb preparation cancelled by death!')
+
+                    # Clear freeze states
+                    tank['laser_cooling_down'] = False
+                    tank['laser_cooldown_end'] = 0
+                    tank['bomb_freezing'] = False
+                    tank['bomb_freeze_end'] = 0
+
                     # Award kill to shooter
                     if bullet['owner_id'] in players:
                         players[bullet['owner_id']]['kills'] += 1
@@ -2482,6 +2512,23 @@ def game_loop():
                         if tank.get('has_atomic_bomb', False):
                             tank['has_atomic_bomb'] = False
                             print(f'💣 {tank["name"]} dropped atomic bomb on death by snake!')
+
+                        # Cancel any active preparation states
+                        if tank.get('laser_preparing', False):
+                            tank['laser_preparing'] = False
+                            tank['laser_preparation_end'] = 0
+                            print(f'❌ {tank["name"]}\'s laser preparation cancelled by snake!')
+
+                        if tank.get('bomb_preparing', False):
+                            tank['bomb_preparing'] = False
+                            tank['bomb_preparation_end'] = 0
+                            print(f'❌ {tank["name"]}\'s bomb preparation cancelled by snake!')
+
+                        # Clear freeze states
+                        tank['laser_cooling_down'] = False
+                        tank['laser_cooldown_end'] = 0
+                        tank['bomb_freezing'] = False
+                        tank['bomb_freeze_end'] = 0
 
                         socketio.emit('death', {
                             'id': player_id,
