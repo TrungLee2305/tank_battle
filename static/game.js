@@ -28,6 +28,9 @@ let lastKilledBy = null;
 // Cache for bush foliage patterns (optimization - avoid regenerating random patterns every frame)
 let bushFoliageCache = new Map();
 
+// Atomic bomb explosion animation
+let explosionAnimation = null; // {startTime, duration}
+
 // UI Elements
 const welcomeScreen = document.getElementById('welcome-screen');
 const deathScreen = document.getElementById('death-screen');
@@ -51,6 +54,9 @@ const skillName = document.getElementById('skill-name');
 const skillIcon = document.getElementById('skill-icon');
 const skillProgressFill = document.getElementById('skill-progress-fill');
 const skillProgressText = document.getElementById('skill-progress-text');
+const atomicBombPanel = document.getElementById('atomic-bomb-panel');
+const bombStatusText = document.getElementById('bomb-status-text');
+const bombActionText = document.getElementById('bomb-action-text');
 
 // Socket event handlers
 socket.on('connect', () => {
@@ -140,6 +146,17 @@ socket.on('supply_collected', (data) => {
     }
 });
 
+socket.on('laser_warning', (data) => {
+    const player = gameState.players.find(p => p.id === data.player_id);
+    if (player) {
+        showNotification(`⚠️ ${data.player_name} is preparing LASER BEAM!`, '#FF0000');
+    }
+});
+
+socket.on('laser_firing', (data) => {
+    showNotification(`🔴 ${data.player_name} FIRING LASER BEAM!`, '#FF0000');
+});
+
 socket.on('skill_activated', (data) => {
     const player = gameState.players.find(p => p.id === data.player_id);
     if (player) {
@@ -171,6 +188,28 @@ socket.on('bots_spawned', (data) => {
 
 socket.on('bots_removed', () => {
     showNotification(`🤖 AI bots removed - enough human players!`, '#00CED1');
+});
+
+socket.on('atomic_bomb_spawned', (data) => {
+    showNotification(`💣 ATOMIC BOMB has appeared! Collect it to use devastating power!`, '#FF8C00');
+});
+
+socket.on('atomic_bomb_collected', (data) => {
+    showNotification(`💣 ${data.player_name} collected the ATOMIC BOMB! Press X to detonate!`, '#FF8C00');
+});
+
+socket.on('bomb_warning', (data) => {
+    showNotification(`⚠️💣 ${data.player_name} is PREPARING ATOMIC BOMB! ${data.duration}s WARNING!`, '#FF0000');
+});
+
+socket.on('atomic_bomb_exploded', (data) => {
+    showNotification(`💥💥💥 ${data.player_name} detonated ATOMIC BOMB! ${data.kills} players killed!`, '#FF0000');
+
+    // Start explosion animation
+    explosionAnimation = {
+        startTime: Date.now(),
+        duration: 2000  // 2 seconds
+    };
 });
 
 socket.on('game_over', (data) => {
@@ -260,6 +299,12 @@ document.addEventListener('keydown', (e) => {
         e.preventDefault();
         socket.emit('activate_skill');
     }
+
+    // Activate atomic bomb with 'X'
+    if (key === 'x') {
+        e.preventDefault();
+        socket.emit('activate_atomic_bomb');
+    }
 });
 
 document.addEventListener('keyup', (e) => {
@@ -326,6 +371,49 @@ function draw() {
     // Clear canvas
     ctx.fillStyle = '#2a2a2a';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Draw atomic bomb explosion animation
+    if (explosionAnimation) {
+        const elapsed = Date.now() - explosionAnimation.startTime;
+        const progress = elapsed / explosionAnimation.duration;
+
+        if (progress < 1) {
+            // Expanding shockwave effect
+            const maxRadius = Math.max(ARENA_WIDTH, ARENA_HEIGHT) * 1.5;
+            const currentRadius = maxRadius * progress;
+            const alpha = 1 - progress;
+
+            // Multiple expanding circles
+            for (let i = 0; i < 3; i++) {
+                const offset = i * 150;
+                const radius = currentRadius - offset;
+
+                if (radius > 0) {
+                    const gradient = ctx.createRadialGradient(
+                        ARENA_WIDTH / 2, ARENA_HEIGHT / 2, 0,
+                        ARENA_WIDTH / 2, ARENA_HEIGHT / 2, radius
+                    );
+                    gradient.addColorStop(0, `rgba(255, 255, 255, ${alpha * 0.8})`);
+                    gradient.addColorStop(0.3, `rgba(255, 165, 0, ${alpha * 0.6})`);
+                    gradient.addColorStop(0.6, `rgba(255, 69, 0, ${alpha * 0.4})`);
+                    gradient.addColorStop(1, `rgba(255, 0, 0, 0)`);
+
+                    ctx.fillStyle = gradient;
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                }
+            }
+
+            // Flash effect
+            if (progress < 0.2) {
+                const flashAlpha = (0.2 - progress) / 0.2;
+                ctx.fillStyle = `rgba(255, 255, 255, ${flashAlpha * 0.9})`;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+        } else {
+            // Animation complete
+            explosionAnimation = null;
+        }
+    }
 
     // Draw grid
     ctx.strokeStyle = '#3a3a3a';
@@ -828,6 +916,77 @@ function draw() {
         ctx.restore();
     }
 
+    // Draw atomic bomb if active
+    if (gameState.atomic_bomb) {
+        const bomb = gameState.atomic_bomb;
+
+        // Intense pulsing animation
+        const pulse = Math.sin(Date.now() / 150) * 0.3 + 1;
+        const size = bomb.size * pulse;
+
+        // Draw danger glow (orange/red)
+        const gradient = ctx.createRadialGradient(bomb.x, bomb.y, 0, bomb.x, bomb.y, size * 2);
+        gradient.addColorStop(0, 'rgba(255, 140, 0, 1)');
+        gradient.addColorStop(0.5, 'rgba(255, 69, 0, 0.6)');
+        gradient.addColorStop(1, 'rgba(255, 0, 0, 0)');
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(bomb.x, bomb.y, size * 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Draw bomb body
+        ctx.fillStyle = '#2C2C2C';
+        ctx.beginPath();
+        ctx.arc(bomb.x, bomb.y, size / 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Draw bomb border (flashing)
+        const flashAlpha = Math.sin(Date.now() / 100) * 0.5 + 0.5;
+        ctx.strokeStyle = `rgba(255, 0, 0, ${flashAlpha})`;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(bomb.x, bomb.y, size / 2, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Draw atomic symbol
+        ctx.fillStyle = '#FF0000';
+        ctx.font = 'bold 24px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('☢️', bomb.x, bomb.y);
+
+        // Draw warning text
+        ctx.fillStyle = `rgba(255, 140, 0, ${flashAlpha})`;
+        ctx.font = 'bold 12px Arial';
+        ctx.fillText('ATOMIC BOMB', bomb.x, bomb.y - size / 2 - 15);
+
+        // Add rotating warning triangles
+        ctx.save();
+        ctx.translate(bomb.x, bomb.y);
+        ctx.rotate(Date.now() / 400);
+
+        for (let i = 0; i < 3; i++) {
+            const angle = (i / 3) * Math.PI * 2;
+            const x = Math.cos(angle) * (size / 2 + 15);
+            const y = Math.sin(angle) * (size / 2 + 15);
+
+            ctx.fillStyle = 'rgba(255, 0, 0, 0.8)';
+            ctx.beginPath();
+            ctx.moveTo(x, y - 8);
+            ctx.lineTo(x - 6, y + 4);
+            ctx.lineTo(x + 6, y + 4);
+            ctx.closePath();
+            ctx.fill();
+
+            // Warning symbol
+            ctx.fillStyle = '#FFFF00';
+            ctx.font = 'bold 10px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('!', x, y);
+        }
+        ctx.restore();
+    }
+
     // Draw bullets
     ctx.fillStyle = '#FFFF00';
     gameState.bullets.forEach(bullet => {
@@ -863,6 +1022,127 @@ function draw() {
             const pulseAlpha = Math.sin(Date.now() / 200) * 0.3 + 0.5;
             ctx.shadowColor = '#FFD700';
             ctx.shadowBlur = 25 * pulseAlpha;
+        }
+
+        // Show laser beam preparation warning
+        if (player.laser_preparing && player.alive) {
+            // Red pulsing warning effect
+            const pulseAlpha = Math.sin(Date.now() / 150) * 0.4 + 0.6;
+            ctx.shadowColor = '#FF0000';
+            ctx.shadowBlur = 50 * pulseAlpha;
+
+            // Draw warning rings around tank
+            ctx.strokeStyle = 'rgba(255, 0, 0, ' + pulseAlpha + ')';
+            ctx.lineWidth = 4;
+            for (let i = 0; i < 3; i++) {
+                ctx.beginPath();
+                ctx.arc(player.x, player.y, TANK_SIZE + 10 + i * 15, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+
+            // Draw warning indicator above tank
+            ctx.fillStyle = 'rgba(255, 0, 0, ' + pulseAlpha + ')';
+            ctx.font = 'bold 20px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('⚠️', player.x, player.y - TANK_SIZE - 20);
+
+            // Show countdown
+            ctx.fillStyle = '#FFFFFF';
+            ctx.font = 'bold 14px Arial';
+            const timeLeft = Math.ceil(player.laser_preparation_time_left);
+            ctx.fillText(`CHARGING ${timeLeft}s`, player.x, player.y - TANK_SIZE - 40);
+        }
+
+        // Show post-firing cooldown indicator
+        if (player.laser_cooling_down && player.alive) {
+            // Blue frozen effect
+            const pulseAlpha = Math.sin(Date.now() / 100) * 0.3 + 0.5;
+            ctx.shadowColor = '#00BFFF';
+            ctx.shadowBlur = 30 * pulseAlpha;
+
+            // Ice crystals around tank
+            ctx.strokeStyle = 'rgba(0, 191, 255, ' + pulseAlpha + ')';
+            ctx.lineWidth = 3;
+            for (let i = 0; i < 8; i++) {
+                const angle = (i / 8) * Math.PI * 2 + Date.now() / 300;
+                const x1 = player.x + Math.cos(angle) * (TANK_SIZE / 2 + 5);
+                const y1 = player.y + Math.sin(angle) * (TANK_SIZE / 2 + 5);
+                const x2 = player.x + Math.cos(angle) * (TANK_SIZE / 2 + 12);
+                const y2 = player.y + Math.sin(angle) * (TANK_SIZE / 2 + 12);
+                ctx.beginPath();
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x2, y2);
+                ctx.stroke();
+            }
+
+            // Frozen indicator
+            ctx.fillStyle = 'rgba(0, 191, 255, ' + pulseAlpha + ')';
+            ctx.font = 'bold 16px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('❄️ FROZEN', player.x, player.y - TANK_SIZE - 30);
+        }
+
+        // Show atomic bomb preparation warning
+        if (player.bomb_preparing && player.alive) {
+            // MASSIVE orange/red pulsing warning effect
+            const pulseAlpha = Math.sin(Date.now() / 100) * 0.5 + 0.5;
+            ctx.shadowColor = '#FF4500';
+            ctx.shadowBlur = 80 * pulseAlpha;
+
+            // Draw HUGE warning rings around tank
+            ctx.strokeStyle = 'rgba(255, 69, 0, ' + pulseAlpha + ')';
+            ctx.lineWidth = 6;
+            for (let i = 0; i < 5; i++) {
+                ctx.beginPath();
+                ctx.arc(player.x, player.y, TANK_SIZE + 20 + i * 20, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+
+            // Draw radiation symbol
+            ctx.fillStyle = 'rgba(255, 69, 0, ' + pulseAlpha + ')';
+            ctx.font = 'bold 30px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('☢️', player.x, player.y - TANK_SIZE - 30);
+
+            // Show HUGE countdown
+            ctx.fillStyle = '#FFFF00';
+            ctx.font = 'bold 20px Arial';
+            const timeLeft = Math.ceil(player.bomb_preparation_time_left);
+            ctx.fillText(`BOMB ARMING ${timeLeft}s`, player.x, player.y - TANK_SIZE - 60);
+
+            // Danger text
+            ctx.fillStyle = '#FF0000';
+            ctx.font = 'bold 16px Arial';
+            ctx.fillText('⚠️ DANGER ⚠️', player.x, player.y - TANK_SIZE - 85);
+        }
+
+        // Show post-detonation freeze indicator
+        if (player.bomb_freezing && player.alive) {
+            // Heavy frozen effect after explosion
+            const pulseAlpha = Math.sin(Date.now() / 80) * 0.4 + 0.6;
+            ctx.shadowColor = '#4169E1';
+            ctx.shadowBlur = 40 * pulseAlpha;
+
+            // Thick ice crystals
+            ctx.strokeStyle = 'rgba(65, 105, 225, ' + pulseAlpha + ')';
+            ctx.lineWidth = 4;
+            for (let i = 0; i < 12; i++) {
+                const angle = (i / 12) * Math.PI * 2 + Date.now() / 200;
+                const x1 = player.x + Math.cos(angle) * (TANK_SIZE / 2 + 8);
+                const y1 = player.y + Math.sin(angle) * (TANK_SIZE / 2 + 8);
+                const x2 = player.x + Math.cos(angle) * (TANK_SIZE / 2 + 18);
+                const y2 = player.y + Math.sin(angle) * (TANK_SIZE / 2 + 18);
+                ctx.beginPath();
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x2, y2);
+                ctx.stroke();
+            }
+
+            // Heavy freeze indicator
+            ctx.fillStyle = 'rgba(65, 105, 225, ' + pulseAlpha + ')';
+            ctx.font = 'bold 18px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('❄️ EXHAUSTED ❄️', player.x, player.y - TANK_SIZE - 35);
         }
 
         // Add visual effects for active skills
@@ -1013,6 +1293,11 @@ function draw() {
         ctx.font = 'bold 12px Arial';
         ctx.textAlign = 'center';
         let nameDisplay = player.is_bot ? `${player.name} 🤖` : player.name;
+
+        // Add atomic bomb indicator
+        if (player.has_atomic_bomb) {
+            nameDisplay = `💣 ${nameDisplay} 💣`;
+        }
 
         // Add team indicator in Duel mode
         if (gameState.game_mode === 'duel' && player.team) {
@@ -1177,6 +1462,31 @@ function updateUI() {
                 skillProgressFill.style.width = '100%';
                 skillProgressText.textContent = 'READY! Press C';
             }
+        }
+
+        // Update atomic bomb panel visibility and status
+        if (myPlayer.has_atomic_bomb || myPlayer.bomb_preparing || myPlayer.bomb_freezing) {
+            atomicBombPanel.style.display = 'block';
+
+            if (myPlayer.bomb_preparing) {
+                // Show countdown during preparation
+                const timeLeft = Math.ceil(myPlayer.bomb_preparation_time_left);
+                bombStatusText.textContent = `ARMING: ${timeLeft}s`;
+                bombActionText.textContent = '⚠️ STAND CLEAR! ⚠️';
+                bombActionText.style.animation = 'blink 0.2s infinite';
+            } else if (myPlayer.bomb_freezing) {
+                // Show exhausted state
+                bombStatusText.textContent = 'EXHAUSTED';
+                bombActionText.textContent = '❄️ Recovering... ❄️';
+                bombActionText.style.animation = 'none';
+            } else {
+                // Ready to activate
+                bombStatusText.textContent = 'READY TO DETONATE';
+                bombActionText.textContent = "Press 'X' to activate!";
+                bombActionText.style.animation = 'blink 0.5s infinite';
+            }
+        } else {
+            atomicBombPanel.style.display = 'none';
         }
 
         // Show death screen with respawn timer

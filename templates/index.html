@@ -95,8 +95,8 @@
                                     <div class="skill-card">
                                         <div class="skill-icon">🔴</div>
                                         <strong>Laser Beam</strong>
-                                        <p class="skill-desc">Instant Kill Laser<br>Unlimited Fire</p>
-                                        <p class="skill-cooldown">3s Duration • 30s CD</p>
+                                        <p class="skill-desc">1s Prep Warning<br>0.5s Instant Kill Laser<br>1s Frozen After</p>
+                                        <p class="skill-cooldown">2.5s Total • 30s CD</p>
                                     </div>
                                 </label>
                                 <label class="skill-option">
@@ -170,6 +170,8 @@
                             <p><strong>WASD</strong> - Move your tank</p>
                             <p><strong>Mouse</strong> - Aim turret</p>
                             <p><strong>Click / Space</strong> - Shoot</p>
+                            <p><strong>C</strong> - Activate Ultimate Ability</p>
+                            <p><strong>X</strong> - Detonate Atomic Bomb 💣</p>
                             <p><strong>Bushes</strong> - Hide to become invisible!</p>
                         </div>
                     </div>
@@ -248,6 +250,20 @@
                     </div>
                 </div>
 
+                <div class="panel" id="atomic-bomb-panel" style="display: none;">
+                    <h3>💣 Atomic Bomb</h3>
+                    <div id="bomb-display">
+                        <div id="bomb-status">
+                            <div id="bomb-ready-indicator" style="background: linear-gradient(135deg, #ff4500, #ff8c00); padding: 15px; border-radius: 8px; text-align: center; animation: pulse 1s infinite;">
+                                <div style="font-size: 40px; margin-bottom: 10px;">☢️</div>
+                                <div id="bomb-status-text" style="color: #fff; font-weight: bold; font-size: 16px; text-shadow: 0 0 10px rgba(255,69,0,0.8);">READY TO DETONATE</div>
+                                <div id="bomb-action-text" style="color: #ffff00; font-weight: bold; font-size: 14px; margin-top: 8px; animation: blink 0.5s infinite;">Press 'X' to activate!</div>
+                            </div>
+                        </div>
+                        <p style="color: #ff4500; font-size: 12px; text-align: center; margin-top: 10px;">⚠️ Kills all non-invincible players!</p>
+                    </div>
+                </div>
+
                 <div class="panel">
                     <h3>Leaderboard</h3>
                     <div id="leaderboard">
@@ -263,7 +279,7 @@
         </div>
 
         <div id="footer">
-            <p>WASD to move • Mouse to aim • Click/Space to shoot • Destroy enemy tanks!</p>
+            <p>WASD to move • Mouse to aim • Click/Space to shoot • C for Ultimate • X for Atomic Bomb!</p>
         </div>
     </div>
 

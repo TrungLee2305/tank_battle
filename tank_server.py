@@ -100,6 +100,8 @@ snake: dict = None  # Current snake on screen (None if no snake active)
 last_snake_time: float = 0  # Last time snake spawned
 shield_drop: dict = None  # Current shield drop on map (None if no shield active)
 last_shield_drop_time: float = 0  # Last time shield drop spawned
+atomic_bomb: dict = None  # Current atomic bomb on map (None if no bomb active)
+last_atomic_bomb_time: float = 0  # Last time atomic bomb spawned
 game_running = False
 terrain_generated = False
 
@@ -140,12 +142,20 @@ SNAKE_SPEED = 15  # Speed of snake movement
 SHIELD_DROP_INTERVAL = 10  # seconds between shield drops
 SHIELD_DURATION = 6  # seconds shield lasts
 
+# Atomic Bomb constants
+ATOMIC_BOMB_INTERVAL = 60  # seconds between atomic bomb spawns
+ATOMIC_BOMB_SIZE = 40  # Size of atomic bomb visual
+ATOMIC_BOMB_PREPARATION = 3.0  # seconds preparation phase (warning, frozen in place)
+ATOMIC_BOMB_FREEZE = 2.0  # seconds post-detonation frozen phase
+
 # Ultimate Skill constants
 SKILL_COOLDOWN = 30  # seconds cooldown (starts after skill ends)
 SKILL_SPEED_DEMON_DURATION = 4  # seconds
 SKILL_SPEED_DEMON_SPEED_MULT = 5.0  # 400% increase = 5x speed
 SKILL_SPEED_DEMON_DAMAGE_BONUS = 100  # +100 damage per bullet
-SKILL_LASER_BEAM_DURATION = 1  # seconds
+SKILL_LASER_BEAM_PREPARATION = 1.0  # seconds preparation phase (warning, frozen in place)
+SKILL_LASER_BEAM_DURATION = 0.5  # seconds firing phase
+SKILL_LASER_BEAM_COOLDOWN = 1.0  # seconds post-firing frozen phase
 SKILL_LASER_RANGE = 800  # Laser reach distance
 SKILL_GHOST_MODE_DURATION = 5  # seconds
 
@@ -1248,6 +1258,75 @@ def spawn_shield_drop():
     last_shield_drop_time = time.time()
 
 
+def spawn_atomic_bomb():
+    """Spawn an atomic bomb that can be collected and used once"""
+    global atomic_bomb, last_atomic_bomb_time
+
+    # Find safe position (not in walls)
+    attempts = 0
+    while attempts < 50:
+        x = random.uniform(ATOMIC_BOMB_SIZE * 2, ARENA_WIDTH - ATOMIC_BOMB_SIZE * 2)
+        y = random.uniform(ATOMIC_BOMB_SIZE * 2, ARENA_HEIGHT - ATOMIC_BOMB_SIZE * 2)
+
+        # Check not in rampart
+        if not check_terrain_collision(x - ATOMIC_BOMB_SIZE/2, y - ATOMIC_BOMB_SIZE/2,
+                                       ATOMIC_BOMB_SIZE, ATOMIC_BOMB_SIZE):
+            atomic_bomb = {
+                'x': x,
+                'y': y,
+                'size': ATOMIC_BOMB_SIZE
+            }
+            last_atomic_bomb_time = time.time()
+            print(f'💣 ATOMIC BOMB spawned at ({int(x)}, {int(y)})!')
+
+            # Broadcast spawn notification
+            socketio.emit('atomic_bomb_spawned', {
+                'x': x,
+                'y': y
+            })
+            return
+        attempts += 1
+
+    # If can't find safe spot, spawn anyway
+    atomic_bomb = {
+        'x': random.uniform(ATOMIC_BOMB_SIZE * 2, ARENA_WIDTH - ATOMIC_BOMB_SIZE * 2),
+        'y': random.uniform(ATOMIC_BOMB_SIZE * 2, ARENA_HEIGHT - ATOMIC_BOMB_SIZE * 2),
+        'size': ATOMIC_BOMB_SIZE
+    }
+    last_atomic_bomb_time = time.time()
+    print(f'💣 ATOMIC BOMB spawned at ({int(atomic_bomb["x"])}, {int(atomic_bomb["y"])})!')
+
+
+def check_atomic_bomb_collection(tank: dict):
+    """Check if tank collected the atomic bomb"""
+    global atomic_bomb
+
+    if not tank['alive'] or atomic_bomb is None or tank.get('has_atomic_bomb', False):
+        return False
+
+    # Check distance to atomic bomb (use squared distance to avoid expensive sqrt)
+    dx = tank['x'] - atomic_bomb['x']
+    dy = tank['y'] - atomic_bomb['y']
+    dist_squared = dx*dx + dy*dy
+
+    # Collection radius
+    if dist_squared < 900:  # 30 pixels
+        tank['has_atomic_bomb'] = True
+        atomic_bomb = None  # Remove bomb from map
+
+        print(f'💣 {tank["name"]} collected ATOMIC BOMB!')
+
+        # Broadcast collection
+        socketio.emit('atomic_bomb_collected', {
+            'player_id': tank['id'],
+            'player_name': tank['name']
+        })
+
+        return True
+
+    return False
+
+
 def check_shield_collection(tank: dict):
     """Check if tank collected the shield drop"""
     global shield_drop
@@ -1337,6 +1416,42 @@ def update_skills():
     current_time = time.time()
 
     for player_id, tank in players.items():
+        # Handle laser beam preparation phase
+        if tank.get('laser_preparing', False) and current_time >= tank['laser_preparation_end']:
+            # Preparation complete, activate laser firing
+            tank['laser_preparing'] = False
+            tank['skill_active'] = True
+            tank['skill_end_time'] = current_time + SKILL_LASER_BEAM_DURATION
+
+            print(f'🔴 {tank["name"]} LASER FIRING! (0.5s)')
+
+            # Broadcast laser firing notification
+            socketio.emit('laser_firing', {
+                'player_id': player_id,
+                'player_name': tank['name']
+            })
+
+        # Handle laser beam post-firing cooldown (frozen state)
+        if tank.get('laser_cooling_down', False) and current_time >= tank['laser_cooldown_end']:
+            tank['laser_cooling_down'] = False
+            print(f'✅ {tank["name"]} laser cooldown complete - movement restored')
+
+        # Handle atomic bomb preparation phase
+        if tank.get('bomb_preparing', False) and current_time >= tank['bomb_preparation_end']:
+            # Preparation complete, DETONATE!
+            tank['bomb_preparing'] = False
+            tank['has_atomic_bomb'] = False  # Consume the bomb
+
+            print(f'💣 {tank["name"]} BOMB DETONATING NOW!')
+
+            # Execute detonation
+            detonate_atomic_bomb(player_id, tank)
+
+        # Handle atomic bomb post-detonation freeze
+        if tank.get('bomb_freezing', False) and current_time >= tank['bomb_freeze_end']:
+            tank['bomb_freezing'] = False
+            print(f'✅ {tank["name"]} bomb freeze complete - movement restored')
+
         # Handle Laser Beam skill - instant kill in laser path
         if tank['skill_active'] and tank['skill'] == 'laser_beam' and tank['alive']:
             # Calculate laser endpoint
@@ -1491,8 +1606,17 @@ def update_skills():
             print(f'⏰ {tank["name"]}\'s {skill_names.get(tank["skill"], tank["skill"])} ended - cooldown starting')
 
             tank['skill_active'] = False
-            # Start cooldown AFTER skill ends
-            tank['skill_cooldown_end'] = current_time + SKILL_COOLDOWN
+
+            # For laser beam, enter post-firing frozen state
+            if tank['skill'] == 'laser_beam':
+                tank['laser_cooling_down'] = True
+                tank['laser_cooldown_end'] = current_time + SKILL_LASER_BEAM_COOLDOWN
+                print(f'❄️ {tank["name"]} entering post-laser cooldown (1s frozen)')
+                # Full skill cooldown starts after post-firing phase ends
+                tank['skill_cooldown_end'] = tank['laser_cooldown_end'] + SKILL_COOLDOWN
+            else:
+                # Start cooldown AFTER skill ends for other skills
+                tank['skill_cooldown_end'] = current_time + SKILL_COOLDOWN
 
 
 def get_team_assignment() -> str:
@@ -1636,6 +1760,15 @@ def create_tank(player_id: str, name: str, color: str = None, icon: str = None, 
         'skill_end_time': 0,  # When current skill activation ends
         'skill_cooldown_end': 0,  # When skill becomes available again
         'snake_slayer_buff_end': 0,  # Snake Slayer buff: 2x damage for 10s after killing giant snake
+        'laser_preparing': False,  # Laser beam preparation phase
+        'laser_preparation_end': 0,  # When preparation ends and firing begins
+        'laser_cooling_down': False,  # Laser beam post-firing frozen phase
+        'laser_cooldown_end': 0,  # When post-firing freeze ends
+        'has_atomic_bomb': False,  # Whether player has collected atomic bomb
+        'bomb_preparing': False,  # Atomic bomb preparation phase
+        'bomb_preparation_end': 0,  # When preparation ends and bomb detonates
+        'bomb_freezing': False,  # Post-detonation freeze phase
+        'bomb_freeze_end': 0,  # When freeze phase ends
         'team': team,  # Team assignment ('red', 'blue', or None)
         'keys': {
             'w': False,
@@ -1699,6 +1832,15 @@ def create_bot(bot_name: str, team: str = None) -> tuple:
         'skill_end_time': 0,
         'skill_cooldown_end': 0,
         'snake_slayer_buff_end': 0,  # Snake Slayer buff
+        'laser_preparing': False,  # Laser beam preparation phase
+        'laser_preparation_end': 0,  # When preparation ends and firing begins
+        'laser_cooling_down': False,  # Laser beam post-firing frozen phase
+        'laser_cooldown_end': 0,  # When post-firing freeze ends
+        'has_atomic_bomb': False,  # Whether bot has collected atomic bomb
+        'bomb_preparing': False,  # Atomic bomb preparation phase
+        'bomb_preparation_end': 0,  # When preparation ends and bomb detonates
+        'bomb_freezing': False,  # Post-detonation freeze phase
+        'bomb_freeze_end': 0,  # When freeze phase ends
         'team': team,  # Team assignment for Duel mode
         'keys': {
             'w': False,
@@ -1860,6 +2002,18 @@ def check_and_manage_bots():
 def update_tank_movement(tank: dict):
     """Update tank velocity based on key inputs"""
     if not tank['alive']:
+        return
+
+    # Freeze tank if preparing laser beam or in post-firing cooldown
+    if tank.get('laser_preparing', False) or tank.get('laser_cooling_down', False):
+        tank['vx'] = 0
+        tank['vy'] = 0
+        return
+
+    # Freeze tank if preparing atomic bomb or in post-detonation freeze
+    if tank.get('bomb_preparing', False) or tank.get('bomb_freezing', False):
+        tank['vx'] = 0
+        tank['vy'] = 0
         return
 
     # Reset velocity
@@ -2176,6 +2330,11 @@ def update_bullets(current_time):
                     tank['deaths'] += 1
                     tank['respawn_timer'] = RESPAWN_TIME * GAME_TICK_RATE  # Convert seconds to ticks
 
+                    # Drop atomic bomb if player had one
+                    if tank.get('has_atomic_bomb', False):
+                        tank['has_atomic_bomb'] = False
+                        print(f'💣 {tank["name"]} dropped atomic bomb on death!')
+
                     # Award kill to shooter
                     if bullet['owner_id'] in players:
                         players[bullet['owner_id']]['kills'] += 1
@@ -2230,7 +2389,7 @@ def create_bullet(tank: dict, target_angle: float) -> dict:
 
 def game_loop():
     """Main game loop that runs on the server"""
-    global game_running, last_super_drop_time, snake, last_snake_time, shield_drop, last_shield_drop_time
+    global game_running, last_super_drop_time, snake, last_snake_time, shield_drop, last_shield_drop_time, atomic_bomb, last_atomic_bomb_time
     game_running = True
 
     while game_running:
@@ -2262,6 +2421,12 @@ def game_loop():
                 if last_shield_drop_time == 0 or (current_time - last_shield_drop_time >= SHIELD_DROP_INTERVAL):
                     if shield_drop is None:  # Only spawn if no shield is active
                         spawn_shield_drop()
+
+            # Check if we need to spawn atomic bomb (every 60s)
+            if terrain_generated:
+                if last_atomic_bomb_time == 0 or (current_time - last_atomic_bomb_time >= ATOMIC_BOMB_INTERVAL):
+                    if atomic_bomb is None:  # Only spawn if no bomb is active
+                        spawn_atomic_bomb()
 
             # Update power-up timers
             update_powerups()
@@ -2303,12 +2468,21 @@ def game_loop():
                             'powerup_type': 'invincibility_shield'
                         })
 
+                    # Check atomic bomb collection
+                    check_atomic_bomb_collection(tank)
+
                     # Check snake collision (instant death)
                     if check_snake_collision(tank):
                         tank['alive'] = False
                         tank['health'] = 0
                         tank['respawn_timer'] = RESPAWN_TIME * GAME_TICK_RATE
                         tank['deaths'] += 1
+
+                        # Drop atomic bomb if player had one
+                        if tank.get('has_atomic_bomb', False):
+                            tank['has_atomic_bomb'] = False
+                            print(f'💣 {tank["name"]} dropped atomic bomb on death by snake!')
+
                         socketio.emit('death', {
                             'id': player_id,
                             'killer': 'Snake',
@@ -2396,6 +2570,13 @@ def game_loop():
                         'skill_active': t['skill_active'],  # Whether skill is currently active
                         'skill_time_left': max(0, t['skill_end_time'] - time.time()) if t['skill_active'] else 0,
                         'skill_cooldown': max(0, t['skill_cooldown_end'] - time.time()),
+                        'laser_preparing': t.get('laser_preparing', False),  # Laser beam preparation phase
+                        'laser_preparation_time_left': max(0, t.get('laser_preparation_end', 0) - time.time()) if t.get('laser_preparing', False) else 0,
+                        'laser_cooling_down': t.get('laser_cooling_down', False),  # Laser beam post-firing frozen
+                        'has_atomic_bomb': t.get('has_atomic_bomb', False),  # Has atomic bomb ready to use
+                        'bomb_preparing': t.get('bomb_preparing', False),  # Atomic bomb preparation phase
+                        'bomb_preparation_time_left': max(0, t.get('bomb_preparation_end', 0) - time.time()) if t.get('bomb_preparing', False) else 0,
+                        'bomb_freezing': t.get('bomb_freezing', False),  # Post-detonation freeze
                         'is_bot': t.get('is_bot', False),  # Identify bots
                         'team': t.get('team')  # Team assignment (red, blue, or None)
                     }
@@ -2414,6 +2595,7 @@ def game_loop():
                 'supply_drops': supply_drops,  # Include all active supply drops
                 'snake': snake,  # Include snake if active
                 'shield_drop': shield_drop,  # Include shield drop if active
+                'atomic_bomb': atomic_bomb,  # Include atomic bomb if active
                 'game_mode': current_game_mode,  # Current game mode (ffa or duel)
                 'red_base': red_base,  # Red team base (Duel mode)
                 'blue_base': blue_base,  # Blue team base (Duel mode)
@@ -2636,22 +2818,138 @@ def handle_activate_skill():
         skill = tank['skill']
         skill_names = {'speed_demon': 'Speed Demon ⚡', 'laser_beam': 'Laser Beam 🔴', 'ghost_mode': 'Ghost Mode 👻'}
 
-        if skill == 'speed_demon':
-            duration = SKILL_SPEED_DEMON_DURATION
-        elif skill == 'laser_beam':
-            duration = SKILL_LASER_BEAM_DURATION
-        else:  # ghost_mode
-            duration = SKILL_GHOST_MODE_DURATION
+        if skill == 'laser_beam':
+            # Laser beam starts with preparation phase
+            tank['laser_preparing'] = True
+            tank['laser_preparation_end'] = current_time + SKILL_LASER_BEAM_PREPARATION
+            print(f'⚠️ {tank["name"]} PREPARING LASER BEAM... (1s warning)')
 
-        tank['skill_active'] = True
-        tank['skill_end_time'] = current_time + duration
+            # Broadcast warning to all players
+            socketio.emit('laser_warning', {
+                'player_id': player_id,
+                'player_name': tank['name'],
+                'duration': SKILL_LASER_BEAM_PREPARATION
+            })
+        else:
+            # Other skills activate immediately
+            if skill == 'speed_demon':
+                duration = SKILL_SPEED_DEMON_DURATION
+            else:  # ghost_mode
+                duration = SKILL_GHOST_MODE_DURATION
 
-        print(f'💥 {tank["name"]} activated {skill_names.get(skill, skill)}! ({duration}s duration)')
+            tank['skill_active'] = True
+            tank['skill_end_time'] = current_time + duration
 
-        socketio.emit('skill_activated', {
+            print(f'💥 {tank["name"]} activated {skill_names.get(skill, skill)}! ({duration}s duration)')
+
+            socketio.emit('skill_activated', {
+                'player_id': player_id,
+                'skill': skill,
+                'duration': duration
+            })
+
+
+def detonate_atomic_bomb(player_id: str, tank: dict):
+    """Execute the atomic bomb detonation and kill all non-invincible players"""
+    current_time = time.time()
+
+    print(f'💣💥 {tank["name"]} ATOMIC BOMB DETONATED! Screen-wide explosion!')
+
+    # Count kills and update scores
+    kills_count = 0
+    victims = []
+
+    for target_id, target in players.items():
+        if target_id == player_id or not target['alive']:
+            continue
+
+        # Check if target is invincible
+        target_invincible = (
+            (target['skill_active'] and target['skill'] == 'ghost_mode') or
+            (current_time < target['invincible_until']) or
+            ('invincibility_shield' in target['powerups'])
+        )
+
+        if target_invincible:
+            print(f'  🛡️ {target["name"]} survived - invincible!')
+            continue
+
+        # KILL THE TARGET!
+        target['health'] = 0
+        target['alive'] = False
+        target['deaths'] += 1
+        target['respawn_timer'] = RESPAWN_TIME * GAME_TICK_RATE
+        kills_count += 1
+        victims.append(target['name'])
+
+        # Update team kills in Duel mode
+        if current_game_mode == GAME_MODE_DUEL and tank.get('team') and target.get('team'):
+            if tank['team'] == 'red':
+                global team_red_kills
+                team_red_kills += 1
+            elif tank['team'] == 'blue':
+                global team_blue_kills
+                team_blue_kills += 1
+
+        # Individual kill notification
+        socketio.emit('tank_destroyed', {
+            'victim_id': target_id,
+            'victim_name': target['name'],
+            'killer_id': player_id,
+            'killer_name': tank['name']
+        })
+
+    # Award points for kills
+    tank['kills'] += kills_count
+    tank['score'] += kills_count * 100
+
+    print(f'  💀 {kills_count} players killed: {", ".join(victims) if victims else "None (all invincible)"}')
+
+    # Start post-detonation freeze
+    tank['bomb_freezing'] = True
+    tank['bomb_freeze_end'] = current_time + ATOMIC_BOMB_FREEZE
+    print(f'❄️ {tank["name"]} entering post-detonation freeze (2s)')
+
+    # Broadcast atomic bomb explosion event
+    socketio.emit('atomic_bomb_exploded', {
+        'player_id': player_id,
+        'player_name': tank['name'],
+        'kills': kills_count,
+        'victims': victims
+    })
+
+
+@socketio.on('activate_atomic_bomb')
+def handle_activate_atomic_bomb():
+    """Handle atomic bomb activation (Press 'X')"""
+    player_id = request.sid
+
+    if player_id in players:
+        tank = players[player_id]
+        current_time = time.time()
+
+        if not tank['alive']:
+            return
+
+        # Check if player has atomic bomb
+        if not tank.get('has_atomic_bomb', False):
+            print(f'❌ {tank["name"]} tried to use atomic bomb but doesn\'t have one!')
+            return
+
+        # Check if already preparing or freezing
+        if tank.get('bomb_preparing', False) or tank.get('bomb_freezing', False):
+            return
+
+        # Start preparation phase (3 seconds)
+        tank['bomb_preparing'] = True
+        tank['bomb_preparation_end'] = current_time + ATOMIC_BOMB_PREPARATION
+        print(f'⚠️ {tank["name"]} PREPARING ATOMIC BOMB... (3s warning)')
+
+        # Broadcast warning to all players
+        socketio.emit('bomb_warning', {
             'player_id': player_id,
-            'skill': skill,
-            'duration': duration
+            'player_name': tank['name'],
+            'duration': ATOMIC_BOMB_PREPARATION
         })
 
 
