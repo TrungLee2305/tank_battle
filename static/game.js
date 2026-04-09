@@ -33,13 +33,15 @@ function shadeColor(hex, amount) {
     return `rgb(${r}, ${g}, ${b})`;
 }
 
-function drawTankByClass(ctx, cx, cy, angle, color, tankClass, size) {
+function drawTankByClass(ctx, cx, cy, angle, color, tankClass, size, treadPhase) {
     const tankClassSafe = TANK_CLASSES.includes(tankClass) ? tankClass : 'gun';
     const s = size || TANK_SIZE;
     const bodyDark = shadeColor(color, -0.35);
     const bodyLight = shadeColor(color, 0.15);
     const treadColor = '#222222';
     const treadHighlight = '#555555';
+    // treadPhase (pixels) makes the tread hash marks scroll while moving
+    const phase = treadPhase || 0;
 
     ctx.save();
     ctx.translate(cx, cy);
@@ -57,11 +59,18 @@ function drawTankByClass(ctx, cx, cy, angle, color, tankClass, size) {
         ctx.fillStyle = treadColor;
         ctx.fillRect(-treadW / 2, -bodyH / 2 - treadH * 0.6, treadW, treadH);
         ctx.fillRect(-treadW / 2, bodyH / 2 - treadH * 0.4, treadW, treadH);
-        // Tread hash marks
+        // Tread hash marks (scroll with phase when tank moves)
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(-treadW / 2, -bodyH / 2 - treadH * 0.7, treadW, treadH + s * 0.1);
+        ctx.rect(-treadW / 2, bodyH / 2 - treadH * 0.5, treadW, treadH + s * 0.1);
+        ctx.clip();
         ctx.strokeStyle = treadHighlight;
         ctx.lineWidth = 1;
-        for (let i = -4; i <= 4; i++) {
-            const x = i * (treadW / 9);
+        const gunStep = treadW / 9;
+        const gunOffset = ((phase % gunStep) + gunStep) % gunStep;
+        for (let i = -5; i <= 5; i++) {
+            const x = i * gunStep + gunOffset;
             ctx.beginPath();
             ctx.moveTo(x, -bodyH / 2 - treadH * 0.6);
             ctx.lineTo(x, -bodyH / 2 + treadH * 0.4);
@@ -71,6 +80,7 @@ function drawTankByClass(ctx, cx, cy, angle, color, tankClass, size) {
             ctx.lineTo(x, bodyH / 2 + treadH * 0.6);
             ctx.stroke();
         }
+        ctx.restore();
 
         // Body with gradient
         const grad = ctx.createLinearGradient(0, -bodyH / 2, 0, bodyH / 2);
@@ -123,10 +133,17 @@ function drawTankByClass(ctx, cx, cy, angle, color, tankClass, size) {
         ctx.fillStyle = treadColor;
         ctx.fillRect(-treadW / 2, -bodyH / 2 - treadH * 0.4, treadW, treadH);
         ctx.fillRect(-treadW / 2, bodyH / 2 - treadH * 0.6, treadW, treadH);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(-treadW / 2, -bodyH / 2 - treadH * 0.5, treadW, treadH + s * 0.08);
+        ctx.rect(-treadW / 2, bodyH / 2 - treadH * 0.7, treadW, treadH + s * 0.08);
+        ctx.clip();
         ctx.strokeStyle = treadHighlight;
         ctx.lineWidth = 1;
-        for (let i = -3; i <= 3; i++) {
-            const x = i * (treadW / 7);
+        const lightStep = treadW / 7;
+        const lightOffset = ((phase % lightStep) + lightStep) % lightStep;
+        for (let i = -4; i <= 4; i++) {
+            const x = i * lightStep + lightOffset;
             ctx.beginPath();
             ctx.moveTo(x, -bodyH / 2 - treadH * 0.4);
             ctx.lineTo(x, -bodyH / 2 + treadH * 0.6);
@@ -136,6 +153,7 @@ function drawTankByClass(ctx, cx, cy, angle, color, tankClass, size) {
             ctx.lineTo(x, bodyH / 2 + treadH * 0.4);
             ctx.stroke();
         }
+        ctx.restore();
 
         // Angled diamond-ish body
         const grad = ctx.createLinearGradient(0, -bodyH / 2, 0, bodyH / 2);
@@ -193,10 +211,17 @@ function drawTankByClass(ctx, cx, cy, angle, color, tankClass, size) {
         ctx.fillStyle = treadColor;
         ctx.fillRect(-treadW / 2, -bodyH / 2 - treadH * 0.7, treadW, treadH);
         ctx.fillRect(-treadW / 2, bodyH / 2 - treadH * 0.3, treadW, treadH);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(-treadW / 2, -bodyH / 2 - treadH * 0.8, treadW, treadH + s * 0.12);
+        ctx.rect(-treadW / 2, bodyH / 2 - treadH * 0.4, treadW, treadH + s * 0.12);
+        ctx.clip();
         ctx.strokeStyle = treadHighlight;
         ctx.lineWidth = 1.5;
-        for (let i = -5; i <= 5; i++) {
-            const x = i * (treadW / 11);
+        const armoredStep = treadW / 11;
+        const armoredOffset = ((phase % armoredStep) + armoredStep) % armoredStep;
+        for (let i = -6; i <= 6; i++) {
+            const x = i * armoredStep + armoredOffset;
             ctx.beginPath();
             ctx.moveTo(x, -bodyH / 2 - treadH * 0.7);
             ctx.lineTo(x, -bodyH / 2 + treadH * 0.3);
@@ -206,6 +231,7 @@ function drawTankByClass(ctx, cx, cy, angle, color, tankClass, size) {
             ctx.lineTo(x, bodyH / 2 + treadH * 0.7);
             ctx.stroke();
         }
+        ctx.restore();
 
         // Heavy body with gradient
         const grad = ctx.createLinearGradient(0, -bodyH / 2, 0, bodyH / 2);
@@ -271,6 +297,243 @@ let bushFoliageCache = new Map();
 
 // Atomic bomb explosion animation
 let explosionAnimation = null; // {startTime, duration}
+
+// ===== Effect system (muzzle flash, exhaust, death explosion) =====
+// Lightweight particle array drawn every frame in draw()
+// Each particle: { x, y, vx, vy, life, maxLife, type, color, size, rot, rotSpeed }
+const particles = [];
+// Muzzle flashes: { x, y, angle, startTime, duration, color }
+const muzzleFlashes = [];
+// Previous player snapshot for detecting movement / death between ticks
+const prevPlayerState = new Map();
+// Accumulated tread scroll distance per player (pixels)
+const treadPhaseByPlayer = new Map();
+
+function spawnExhaust(x, y, dirAngle) {
+    // A soft gray puff drifting opposite the direction of travel
+    const backAngle = dirAngle + Math.PI;
+    const spread = (Math.random() - 0.5) * 0.6;
+    const speed = 0.3 + Math.random() * 0.4;
+    particles.push({
+        x: x,
+        y: y,
+        vx: Math.cos(backAngle + spread) * speed,
+        vy: Math.sin(backAngle + spread) * speed,
+        life: 500 + Math.random() * 200,
+        maxLife: 700,
+        type: 'exhaust',
+        color: '220, 220, 220',
+        size: 3 + Math.random() * 2
+    });
+}
+
+function spawnMuzzleFlash(x, y, angle, color) {
+    muzzleFlashes.push({
+        x: x,
+        y: y,
+        angle: angle,
+        startTime: Date.now(),
+        duration: 120,
+        color: color || '#FFD700'
+    });
+    // Also spit a few spark particles
+    for (let i = 0; i < 5; i++) {
+        const sparkAngle = angle + (Math.random() - 0.5) * 0.5;
+        const speed = 1.5 + Math.random() * 2.0;
+        particles.push({
+            x: x + Math.cos(angle) * (TANK_SIZE / 2 + 10),
+            y: y + Math.sin(angle) * (TANK_SIZE / 2 + 10),
+            vx: Math.cos(sparkAngle) * speed,
+            vy: Math.sin(sparkAngle) * speed,
+            life: 180,
+            maxLife: 180,
+            type: 'spark',
+            color: '255, 200, 80',
+            size: 1.5 + Math.random() * 1.5
+        });
+    }
+}
+
+function spawnDeathExplosion(x, y, color) {
+    // Ring-type particle + many debris particles + a few smoke puffs
+    particles.push({
+        x: x, y: y, vx: 0, vy: 0,
+        life: 600, maxLife: 600,
+        type: 'ring',
+        color: '255, 120, 40',
+        size: 5  // starting radius
+    });
+    // Debris: small rotated rectangles flying outward
+    for (let i = 0; i < 18; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const speed = 1.5 + Math.random() * 3.5;
+        particles.push({
+            x: x,
+            y: y,
+            vx: Math.cos(a) * speed,
+            vy: Math.sin(a) * speed,
+            life: 700 + Math.random() * 300,
+            maxLife: 1000,
+            type: 'debris',
+            color: color || '#888888',
+            size: 2 + Math.random() * 3,
+            rot: Math.random() * Math.PI * 2,
+            rotSpeed: (Math.random() - 0.5) * 0.4
+        });
+    }
+    // Smoke puffs
+    for (let i = 0; i < 8; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const speed = 0.4 + Math.random() * 0.8;
+        particles.push({
+            x: x + Math.cos(a) * 5,
+            y: y + Math.sin(a) * 5,
+            vx: Math.cos(a) * speed,
+            vy: Math.sin(a) * speed - 0.2,
+            life: 900 + Math.random() * 400,
+            maxLife: 1300,
+            type: 'smoke',
+            color: '80, 80, 80',
+            size: 5 + Math.random() * 4
+        });
+    }
+}
+
+function updateParticles(dtMs) {
+    for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.life -= dtMs;
+        if (p.life <= 0) {
+            particles.splice(i, 1);
+            continue;
+        }
+        p.x += p.vx;
+        p.y += p.vy;
+        if (p.type === 'smoke') {
+            p.size += 0.08;
+            p.vx *= 0.98;
+            p.vy *= 0.98;
+        } else if (p.type === 'debris') {
+            p.vx *= 0.96;
+            p.vy *= 0.96;
+            p.rot += p.rotSpeed;
+        } else if (p.type === 'exhaust') {
+            p.size += 0.04;
+            p.vx *= 0.97;
+            p.vy *= 0.97;
+        } else if (p.type === 'ring') {
+            p.size += 1.8;  // expand
+        } else if (p.type === 'spark') {
+            p.vx *= 0.9;
+            p.vy *= 0.9;
+        }
+    }
+}
+
+function drawParticles() {
+    particles.forEach(p => {
+        const alpha = Math.max(0, p.life / p.maxLife);
+        if (p.type === 'ring') {
+            ctx.save();
+            ctx.strokeStyle = `rgba(${p.color}, ${alpha})`;
+            ctx.lineWidth = 4;
+            ctx.shadowColor = `rgba(${p.color}, ${alpha})`;
+            ctx.shadowBlur = 20;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+        } else if (p.type === 'debris') {
+            ctx.save();
+            ctx.translate(p.x, p.y);
+            ctx.rotate(p.rot);
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = p.color;
+            ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
+            ctx.restore();
+        } else {
+            // smoke, exhaust, spark all use circular soft blobs
+            ctx.save();
+            ctx.fillStyle = `rgba(${p.color}, ${alpha * 0.8})`;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
+    });
+}
+
+function drawMuzzleFlashes() {
+    const now = Date.now();
+    for (let i = muzzleFlashes.length - 1; i >= 0; i--) {
+        const f = muzzleFlashes[i];
+        const elapsed = now - f.startTime;
+        if (elapsed >= f.duration) {
+            muzzleFlashes.splice(i, 1);
+            continue;
+        }
+        const progress = elapsed / f.duration;
+        const alpha = 1 - progress;
+        const flashLen = (TANK_SIZE * 0.55) * (1 - progress * 0.5);
+        const flashWidth = TANK_SIZE * 0.28 * (1 - progress * 0.4);
+
+        ctx.save();
+        // The flash originates at the end of the barrel
+        const muzzleX = f.x + Math.cos(f.angle) * (TANK_SIZE / 2 + 12);
+        const muzzleY = f.y + Math.sin(f.angle) * (TANK_SIZE / 2 + 12);
+        ctx.translate(muzzleX, muzzleY);
+        ctx.rotate(f.angle);
+
+        // Bright core
+        ctx.shadowColor = '#FFD700';
+        ctx.shadowBlur = 25 * alpha;
+        const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, flashLen);
+        grad.addColorStop(0, `rgba(255, 255, 220, ${alpha})`);
+        grad.addColorStop(0.4, `rgba(255, 200, 60, ${alpha * 0.9})`);
+        grad.addColorStop(1, `rgba(255, 100, 0, 0)`);
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.ellipse(flashLen * 0.4, 0, flashLen, flashWidth, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    }
+}
+
+// Compare the new gameState.players with prevPlayerState to detect:
+//   - movement (spawn exhaust + tread scroll)
+//   - death (spawn explosion)
+// Called whenever a new game_state arrives.
+function detectPlayerEventsAndUpdatePrev(newPlayers) {
+    const seen = new Set();
+    newPlayers.forEach(p => {
+        seen.add(p.id);
+        const prev = prevPlayerState.get(p.id);
+        if (prev) {
+            const dx = p.x - prev.x;
+            const dy = p.y - prev.y;
+            const movedSq = dx * dx + dy * dy;
+            // Moved enough between ticks -> emit exhaust puff
+            if (p.alive && movedSq > 1.2) {
+                const dirAngle = Math.atan2(dy, dx);
+                // Emit exhaust from the rear of the tank
+                const rearX = p.x - Math.cos(dirAngle) * (TANK_SIZE / 2);
+                const rearY = p.y - Math.sin(dirAngle) * (TANK_SIZE / 2);
+                spawnExhaust(rearX, rearY, dirAngle);
+            }
+            // Death transition: was alive, now not
+            if (prev.alive && !p.alive) {
+                spawnDeathExplosion(prev.x, prev.y, p.color);
+            }
+        }
+        prevPlayerState.set(p.id, {
+            x: p.x, y: p.y, alive: p.alive, health: p.health
+        });
+    });
+    // Clean up players who left
+    for (const id of prevPlayerState.keys()) {
+        if (!seen.has(id)) prevPlayerState.delete(id);
+    }
+}
 
 // UI Elements
 const welcomeScreen = document.getElementById('welcome-screen');
@@ -340,6 +603,8 @@ socket.on('player_left', (data) => {
 socket.on('game_state', (data) => {
     // Preserve terrain if not in update (optimization - terrain sent once)
     const preservedTerrain = gameState.terrain;
+    // Detect movement/death events BEFORE overwriting gameState
+    detectPlayerEventsAndUpdatePrev(data.players || []);
     gameState = data;
     if (!gameState.terrain && preservedTerrain) {
         gameState.terrain = preservedTerrain;
@@ -363,7 +628,10 @@ socket.on('tank_destroyed', (data) => {
 });
 
 socket.on('shot_fired', (data) => {
-    // Could play sound effect here
+    // Render a muzzle flash at the shooter's barrel tip
+    if (typeof data.x === 'number' && typeof data.y === 'number' && typeof data.angle === 'number') {
+        spawnMuzzleFlash(data.x, data.y, data.angle);
+    }
 });
 
 socket.on('supply_collected', (data) => {
@@ -1801,6 +2069,13 @@ function draw() {
 
         ctx.globalAlpha = 1.0;
     });
+
+    // Update + draw particles (exhaust, debris, smoke, rings, sparks)
+    // Use a fixed dt based on server tick so movement feels consistent
+    updateParticles(1000 / 30);
+    drawParticles();
+    // Muzzle flashes on top of everything
+    drawMuzzleFlashes();
 }
 
 // Update UI elements

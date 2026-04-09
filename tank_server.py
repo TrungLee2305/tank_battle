@@ -2095,6 +2095,14 @@ def update_bot_ai(bot: dict):
         else:
             bot['shoot_cooldown'] = SHOOT_COOLDOWN
 
+        # Broadcast the shot so every client can render a muzzle flash for bots too
+        socketio.emit('shot_fired', {
+            'player_id': bot['id'],
+            'x': bot['x'],
+            'y': bot['y'],
+            'angle': bot['angle']
+        })
+
 
 def check_and_manage_bots():
     """Check player count and spawn/remove bots as needed"""
@@ -3087,8 +3095,13 @@ def handle_shoot():
             else:
                 tank['shoot_cooldown'] = SHOOT_COOLDOWN
 
-            # Notify about shot
-            emit('shot_fired', {'player_id': player_id})
+            # Broadcast the shot so every client can render a muzzle flash
+            socketio.emit('shot_fired', {
+                'player_id': player_id,
+                'x': tank['x'],
+                'y': tank['y'],
+                'angle': tank['angle']
+            })
 
 
 @socketio.on('activate_skill')
