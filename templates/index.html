@@ -24,90 +24,66 @@
                         <input type="text" id="player-name" placeholder="Your name" maxlength="15" autocomplete="off">
 
                         <div class="customization-section">
-                            <h3>Customize Your Tank:</h3>
+                            <h3>Choose Your Tank:</h3>
+                            <div class="tank-class-options">
+                                <label class="tank-class-option">
+                                    <input type="radio" name="tank-class" value="gun" checked>
+                                    <div class="tank-class-card">
+                                        <canvas class="tank-preview-canvas" data-class="gun" width="140" height="110"></canvas>
+                                        <strong>Gun Tank</strong>
+                                        <p class="tank-class-desc">Heavy gunner with a long barrel</p>
+                                        <p class="tank-class-ult">🔴 Ultimate: Laser Beam</p>
+                                    </div>
+                                </label>
+                                <label class="tank-class-option">
+                                    <input type="radio" name="tank-class" value="light">
+                                    <div class="tank-class-card">
+                                        <canvas class="tank-preview-canvas" data-class="light" width="140" height="110"></canvas>
+                                        <strong>Light Tank</strong>
+                                        <p class="tank-class-desc">Sleek and fast scout</p>
+                                        <p class="tank-class-ult">⚡ Ultimate: Speed Demon</p>
+                                    </div>
+                                </label>
+                                <label class="tank-class-option">
+                                    <input type="radio" name="tank-class" value="armored">
+                                    <div class="tank-class-card">
+                                        <canvas class="tank-preview-canvas" data-class="armored" width="140" height="110"></canvas>
+                                        <strong>Armored Tank</strong>
+                                        <p class="tank-class-desc">Thick plates, stubby gun</p>
+                                        <p class="tank-class-ult">👻 Ultimate: Ghost Mode</p>
+                                    </div>
+                                </label>
+                            </div>
 
                             <div class="color-selection">
-                                <label for="tank-color">Tank Color:</label>
-                                <input type="color" id="tank-color" value="#32CD32">
-                            </div>
-
-                            <div class="icon-selection">
-                                <label>Tank Icon:</label>
-                                <div class="icon-grid">
-                                    <label class="icon-option">
-                                        <input type="radio" name="tank-icon" value="⭐" checked>
-                                        <span class="icon-display">⭐</span>
+                                <label>Tank Color:</label>
+                                <div class="color-swatches">
+                                    <label class="color-swatch">
+                                        <input type="radio" name="tank-color" value="#32CD32" checked>
+                                        <span class="swatch-display" style="background:#32CD32"></span>
+                                        <span class="swatch-label">Green</span>
                                     </label>
-                                    <label class="icon-option">
-                                        <input type="radio" name="tank-icon" value="🔥">
-                                        <span class="icon-display">🔥</span>
+                                    <label class="color-swatch">
+                                        <input type="radio" name="tank-color" value="#E53935">
+                                        <span class="swatch-display" style="background:#E53935"></span>
+                                        <span class="swatch-label">Red</span>
                                     </label>
-                                    <label class="icon-option">
-                                        <input type="radio" name="tank-icon" value="💎">
-                                        <span class="icon-display">💎</span>
+                                    <label class="color-swatch">
+                                        <input type="radio" name="tank-color" value="#1E88E5">
+                                        <span class="swatch-display" style="background:#1E88E5"></span>
+                                        <span class="swatch-label">Blue</span>
                                     </label>
-                                    <label class="icon-option">
-                                        <input type="radio" name="tank-icon" value="⚡">
-                                        <span class="icon-display">⚡</span>
+                                    <label class="color-swatch">
+                                        <input type="radio" name="tank-color" value="#FDD835">
+                                        <span class="swatch-display" style="background:#FDD835"></span>
+                                        <span class="swatch-label">Yellow</span>
                                     </label>
-                                    <label class="icon-option">
-                                        <input type="radio" name="tank-icon" value="👑">
-                                        <span class="icon-display">👑</span>
-                                    </label>
-                                    <label class="icon-option">
-                                        <input type="radio" name="tank-icon" value="🎯">
-                                        <span class="icon-display">🎯</span>
-                                    </label>
-                                    <label class="icon-option">
-                                        <input type="radio" name="tank-icon" value="💀">
-                                        <span class="icon-display">💀</span>
-                                    </label>
-                                    <label class="icon-option">
-                                        <input type="radio" name="tank-icon" value="🌟">
-                                        <span class="icon-display">🌟</span>
-                                    </label>
-                                    <label class="icon-option">
-                                        <input type="radio" name="tank-icon" value="🚀">
-                                        <span class="icon-display">🚀</span>
-                                    </label>
-                                    <label class="icon-option">
-                                        <input type="radio" name="tank-icon" value="🎮">
-                                        <span class="icon-display">🎮</span>
+                                    <label class="color-swatch">
+                                        <input type="radio" name="tank-color" value="#8E24AA">
+                                        <span class="swatch-display" style="background:#8E24AA"></span>
+                                        <span class="swatch-label">Purple</span>
                                     </label>
                                 </div>
-                            </div>
-                        </div>
-
-                        <div class="skill-selection">
-                            <h3>Select Ultimate Ability:</h3>
-                            <div class="skill-options">
-                                <label class="skill-option">
-                                    <input type="radio" name="skill" value="speed_demon" checked>
-                                    <div class="skill-card">
-                                        <div class="skill-icon">⚡</div>
-                                        <strong>Speed Demon</strong>
-                                        <p class="skill-desc">+400% Speed<br>+100 Bullet Damage</p>
-                                        <p class="skill-cooldown">4s Duration • 30s CD</p>
-                                    </div>
-                                </label>
-                                <label class="skill-option">
-                                    <input type="radio" name="skill" value="laser_beam">
-                                    <div class="skill-card">
-                                        <div class="skill-icon">🔴</div>
-                                        <strong>Laser Beam</strong>
-                                        <p class="skill-desc">1s Prep Warning<br>0.5s Instant Kill Laser<br>1s Frozen After</p>
-                                        <p class="skill-cooldown">2.5s Total • 30s CD</p>
-                                    </div>
-                                </label>
-                                <label class="skill-option">
-                                    <input type="radio" name="skill" value="ghost_mode">
-                                    <div class="skill-card">
-                                        <div class="skill-icon">👻</div>
-                                        <strong>Ghost Mode</strong>
-                                        <p class="skill-desc">Phase Through Walls<br>Total Invincibility</p>
-                                        <p class="skill-cooldown">5s Duration • 30s CD</p>
-                                    </div>
-                                </label>
                             </div>
                             <p class="skill-hint">Press 'C' to activate your ultimate ability in battle!</p>
                         </div>

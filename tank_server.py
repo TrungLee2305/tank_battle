@@ -104,6 +104,7 @@ atomic_bomb: dict = None  # Current atomic bomb on map (None if no bomb active)
 last_atomic_bomb_time: float = 0  # Last time atomic bomb spawned
 current_captain_id: str = None  # ID of current captain (None if no captain)
 last_captain_time: float = 0  # Last time captain was selected
+last_captain_target_time: float = 0  # Last time the captain target effect/notification was triggered
 game_running = False
 terrain_generated = False
 
@@ -1328,7 +1329,7 @@ def spawn_atomic_bomb():
 
 def select_captain():
     """Select a random alive player/bot as the captain"""
-    global current_captain_id, last_captain_time
+    global current_captain_id, last_captain_time, last_captain_target_time
 
     # Get all alive players (including bots)
     alive_tanks = [pid for pid, tank in players.items() if tank['alive']]
@@ -1340,23 +1341,37 @@ def select_captain():
     # Randomly select a captain
     new_captain_id = random.choice(alive_tanks)
 
-    # Remove captain status from previous captain
+    # Remove captain status (and any lingering target effect) from previous captain
     if current_captain_id and current_captain_id in players:
         players[current_captain_id]['is_captain'] = False
+        players[current_captain_id]['captain_targeted_until'] = 0
         print(f'👑 {players[current_captain_id]["name"]} is no longer captain')
 
     # Set new captain
+    now = time.time()
     current_captain_id = new_captain_id
     players[new_captain_id]['is_captain'] = True
-    last_captain_time = time.time()
+    # Immediately mark the new captain as "hunted" so the targeting effect plays
+    players[new_captain_id]['captain_targeted_until'] = now + CAPTAIN_TARGET_DURATION
+    last_captain_time = now
+    # Reset the 30s target timer; the next automatic pulse is 30s from now
+    last_captain_target_time = now
 
     captain_name = players[new_captain_id]['name']
     print(f'👑 {captain_name} has been selected as CAPTAIN! (+50% speed, 2-fan bullets, +50% fire rate)')
+    print(f'🎯👑 CAPTAIN HUNT! {captain_name} is the target (+{CAPTAIN_KILL_REWARD} bounty)')
 
     # Broadcast captain selection
     socketio.emit('captain_selected', {
         'player_id': new_captain_id,
         'player_name': captain_name
+    })
+    # Broadcast the hunt-the-captain targeting effect + notification to everyone
+    socketio.emit('captain_targeted', {
+        'player_id': new_captain_id,
+        'player_name': captain_name,
+        'reward': CAPTAIN_KILL_REWARD,
+        'duration': CAPTAIN_TARGET_DURATION
     })
 
 
@@ -1799,7 +1814,7 @@ def get_team_spawn_position(team: str) -> Tuple[float, float]:
         return get_random_position()
 
 
-def create_tank(player_id: str, name: str, color: str = None, icon: str = None, skill: str = None, team: str = None) -> dict:
+def create_tank(player_id: str, name: str, color: str = None, skill: str = None, team: str = None, tank_class: str = 'gun') -> dict:
     """Create a new tank for a player"""
     # Get position based on team or random
     if team and current_game_mode == GAME_MODE_DUEL:
@@ -1817,8 +1832,9 @@ def create_tank(player_id: str, name: str, color: str = None, icon: str = None, 
     else:
         tank_color = color if color else TANK_COLORS[color_index]
 
-    # Use custom icon if provided, otherwise default star
-    tank_icon = icon if icon else '⭐'
+    # Tank class determines visual body + fixed ultimate
+    if tank_class not in ('gun', 'light', 'armored'):
+        tank_class = 'gun'
     # Use selected skill or default to speed_demon
     tank_skill = skill if skill in ['speed_demon', 'laser_beam', 'ghost_mode'] else 'speed_demon'
 
@@ -1831,7 +1847,7 @@ def create_tank(player_id: str, name: str, color: str = None, icon: str = None, 
         'vx': 0,
         'vy': 0,
         'color': tank_color,
-        'icon': tank_icon,
+        'tank_class': tank_class,  # 'gun' | 'light' | 'armored' (visual + fixed ultimate)
         'health': TANK_MAX_HEALTH,
         'max_health': TANK_MAX_HEALTH,
         'alive': True,
@@ -1858,6 +1874,7 @@ def create_tank(player_id: str, name: str, color: str = None, icon: str = None, 
         'bomb_freezing': False,  # Post-detonation freeze phase
         'bomb_freeze_end': 0,  # When freeze phase ends
         'is_captain': False,  # Whether this tank is the current captain
+        'captain_targeted_until': 0,  # Unix time until the "hunt the captain" effect expires
         'team': team,  # Team assignment ('red', 'blue', or None)
         # Emoji display (Press T to open picker client-side, T again to send)
         'emoji': None,              # Currently displayed emoji (None if not showing)
@@ -1884,8 +1901,13 @@ def create_bot(bot_name: str, team: str = None) -> tuple:
     else:
         pos = get_random_position()
 
-    # Random skill for bot
-    bot_skill = random.choice(['speed_demon', 'laser_beam', 'ghost_mode'])
+    # Random tank class for bot (each class is paired with its ultimate)
+    bot_tank_class = random.choice(['gun', 'light', 'armored'])
+    bot_skill = {
+        'gun': 'laser_beam',
+        'light': 'speed_demon',
+        'armored': 'ghost_mode',
+    }[bot_tank_class]
 
     # Random color for bot (or team color in Duel mode)
     if team == 'red':
@@ -1894,9 +1916,6 @@ def create_bot(bot_name: str, team: str = None) -> tuple:
         bot_color = '#0000FF'
     else:
         bot_color = random.choice(TANK_COLORS)
-
-    # Random icon for bot
-    bot_icon = random.choice(['🤖', '⚙️', '🎯', '💀', '🔥'])
 
     bot_data = {
         'id': bot_id,
@@ -1907,7 +1926,7 @@ def create_bot(bot_name: str, team: str = None) -> tuple:
         'vx': 0,
         'vy': 0,
         'color': bot_color,
-        'icon': bot_icon,
+        'tank_class': bot_tank_class,
         'health': TANK_MAX_HEALTH,
         'max_health': TANK_MAX_HEALTH,
         'alive': True,
@@ -1934,6 +1953,7 @@ def create_bot(bot_name: str, team: str = None) -> tuple:
         'bomb_freezing': False,  # Post-detonation freeze phase
         'bomb_freeze_end': 0,  # When freeze phase ends
         'is_captain': False,  # Whether this bot is the current captain
+        'captain_targeted_until': 0,  # Unix time until the "hunt the captain" effect expires
         'team': team,  # Team assignment for Duel mode
         'emoji': None,
         'emoji_end_time': 0,
@@ -2584,7 +2604,7 @@ def create_bullet(tank: dict, target_angle: float) -> dict:
 
 def game_loop():
     """Main game loop that runs on the server"""
-    global game_running, last_super_drop_time, snake, last_snake_time, shield_drop, last_shield_drop_time, atomic_bomb, last_atomic_bomb_time, current_captain_id, last_captain_time
+    global game_running, last_super_drop_time, snake, last_snake_time, shield_drop, last_shield_drop_time, atomic_bomb, last_atomic_bomb_time, current_captain_id, last_captain_time, last_captain_target_time
     game_running = True
 
     while game_running:
@@ -2627,6 +2647,25 @@ def game_loop():
             if terrain_generated and current_captain_id is None:
                 # Select a captain if there isn't one (first time or after captain death with no replacement)
                 select_captain()
+
+            # Every 30s, mark the current captain as "hunted" and notify everyone.
+            # The visual effect lives on the tank via captain_targeted_until and is
+            # broadcast in game_state so all clients render it simultaneously.
+            if (terrain_generated
+                    and current_captain_id is not None
+                    and current_captain_id in players
+                    and players[current_captain_id].get('alive', False)
+                    and current_time - last_captain_target_time >= CAPTAIN_TARGET_INTERVAL):
+                captain_tank = players[current_captain_id]
+                captain_tank['captain_targeted_until'] = current_time + CAPTAIN_TARGET_DURATION
+                last_captain_target_time = current_time
+                socketio.emit('captain_targeted', {
+                    'player_id': current_captain_id,
+                    'player_name': captain_tank['name'],
+                    'reward': CAPTAIN_KILL_REWARD,
+                    'duration': CAPTAIN_TARGET_DURATION
+                })
+                print(f'🎯👑 CAPTAIN HUNT! {captain_tank["name"]} is now the target (+{CAPTAIN_KILL_REWARD} bounty)')
 
             # Update power-up timers
             update_powerups()
@@ -2724,7 +2763,7 @@ def game_loop():
                             # Auto-respawn
                             old_name = tank['name']
                             old_color = tank['color']
-                            old_icon = tank['icon']
+                            old_tank_class = tank.get('tank_class', 'gun')
                             old_skill = tank['skill']
                             old_score = tank['score']
                             old_kills = tank['kills']
@@ -2747,8 +2786,8 @@ def game_loop():
                                 players[player_id] = new_tank
                                 bots[player_id] = new_tank
                             else:
-                                # Respawn human player near their team's core base
-                                new_tank = create_tank(player_id, old_name, old_color, old_icon, old_skill, team=old_team)
+                                # Respawn human player, keeping tank class + color
+                                new_tank = create_tank(player_id, old_name, old_color, old_skill, team=old_team, tank_class=old_tank_class)
                                 new_tank['score'] = old_score
                                 new_tank['kills'] = old_kills
                                 new_tank['deaths'] = old_deaths
@@ -2782,7 +2821,7 @@ def game_loop():
                         'y': t['y'],
                         'angle': t['angle'],
                         'color': t['color'],
-                        'icon': t['icon'],
+                        'tank_class': t.get('tank_class', 'gun'),
                         'health': t['health'],
                         'max_health': t['max_health'],
                         'alive': t['alive'],
@@ -2806,6 +2845,10 @@ def game_loop():
                         'bomb_preparation_time_left': max(0, t.get('bomb_preparation_end', 0) - time.time()) if t.get('bomb_preparing', False) else 0,
                         'bomb_freezing': t.get('bomb_freezing', False),  # Post-detonation freeze
                         'is_captain': t.get('is_captain', False),  # Captain status
+                        'captain_targeted': (
+                            t.get('is_captain', False)
+                            and time.time() < t.get('captain_targeted_until', 0)
+                        ),
                         'is_bot': t.get('is_bot', False),  # Identify bots
                         'team': t.get('team'),  # Team assignment (red, blue, or None)
                         # Emoji display: only send while alive and not expired
@@ -2905,8 +2948,16 @@ def handle_join_game(data):
         game_mode_choice = data.get('game_mode', 'ffa')  # Get player's game mode choice
         map_choice = data.get('map_type', 'advanced')  # Get player's map choice
         player_color = data.get('color', None)  # Get custom color
-        player_icon = data.get('icon', None)  # Get custom icon
-        player_skill = data.get('skill', 'speed_demon')  # Get selected ultimate skill
+        player_tank_class = data.get('tank_class', 'gun')  # 'gun' | 'light' | 'armored'
+        # Tank class is authoritative: it determines the ultimate skill
+        CLASS_TO_SKILL = {
+            'gun': 'laser_beam',
+            'light': 'speed_demon',
+            'armored': 'ghost_mode',
+        }
+        if player_tank_class not in CLASS_TO_SKILL:
+            player_tank_class = 'gun'
+        player_skill = CLASS_TO_SKILL[player_tank_class]
         client_ip = request.environ.get('REMOTE_ADDR', 'unknown')
 
         # Record game mode vote
@@ -2937,7 +2988,7 @@ def handle_join_game(data):
                 return
 
         # Create new tank for player with customization and team
-        players[player_id] = create_tank(player_id, player_name, player_color, player_icon, player_skill, player_team)
+        players[player_id] = create_tank(player_id, player_name, player_color, player_skill, player_team, player_tank_class)
 
         skill_names = {'speed_demon': 'Speed Demon⚡', 'laser_beam': 'Laser Beam🔴', 'ghost_mode': 'Ghost Mode👻'}
         team_str = f' - Team: {player_team.upper()}' if player_team else ''

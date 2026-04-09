@@ -10,6 +10,247 @@ const ARENA_WIDTH = 1440;
 const ARENA_HEIGHT = 840;  // Reduced to fit with header/footer
 const TANK_SIZE = 30;
 
+// ----- Tank class rendering helpers -----
+// 3 tank classes: 'gun' (Laser Beam ult), 'light' (Speed Demon ult), 'armored' (Ghost Mode ult)
+// Each renderer draws a unique body/turret/barrel around (cx, cy) with the given rotation angle and base color.
+// The renderer is used both in-game and for the welcome-screen preview cards.
+const TANK_CLASSES = ['gun', 'light', 'armored'];
+
+function shadeColor(hex, amount) {
+    // amount in [-1, 1]. Positive = lighter, negative = darker.
+    const h = (hex || '#32CD32').replace('#', '');
+    const num = parseInt(h.length === 3
+        ? h.split('').map(c => c + c).join('')
+        : h, 16);
+    let r = (num >> 16) & 0xff;
+    let g = (num >> 8) & 0xff;
+    let b = num & 0xff;
+    const t = amount < 0 ? 0 : 255;
+    const p = Math.abs(amount);
+    r = Math.round((t - r) * p + r);
+    g = Math.round((t - g) * p + g);
+    b = Math.round((t - b) * p + b);
+    return `rgb(${r}, ${g}, ${b})`;
+}
+
+function drawTankByClass(ctx, cx, cy, angle, color, tankClass, size) {
+    const tankClassSafe = TANK_CLASSES.includes(tankClass) ? tankClass : 'gun';
+    const s = size || TANK_SIZE;
+    const bodyDark = shadeColor(color, -0.35);
+    const bodyLight = shadeColor(color, 0.15);
+    const treadColor = '#222222';
+    const treadHighlight = '#555555';
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(angle);
+
+    if (tankClassSafe === 'gun') {
+        // ===== GUN TANK =====
+        // Long rectangular body, large round turret, long thick barrel with muzzle brake
+        const bodyW = s * 1.05;
+        const bodyH = s * 0.85;
+        const treadW = bodyW;
+        const treadH = s * 0.22;
+
+        // Treads (top & bottom of body in local frame)
+        ctx.fillStyle = treadColor;
+        ctx.fillRect(-treadW / 2, -bodyH / 2 - treadH * 0.6, treadW, treadH);
+        ctx.fillRect(-treadW / 2, bodyH / 2 - treadH * 0.4, treadW, treadH);
+        // Tread hash marks
+        ctx.strokeStyle = treadHighlight;
+        ctx.lineWidth = 1;
+        for (let i = -4; i <= 4; i++) {
+            const x = i * (treadW / 9);
+            ctx.beginPath();
+            ctx.moveTo(x, -bodyH / 2 - treadH * 0.6);
+            ctx.lineTo(x, -bodyH / 2 + treadH * 0.4);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(x, bodyH / 2 - treadH * 0.4);
+            ctx.lineTo(x, bodyH / 2 + treadH * 0.6);
+            ctx.stroke();
+        }
+
+        // Body with gradient
+        const grad = ctx.createLinearGradient(0, -bodyH / 2, 0, bodyH / 2);
+        grad.addColorStop(0, bodyLight);
+        grad.addColorStop(1, bodyDark);
+        ctx.fillStyle = grad;
+        ctx.fillRect(-bodyW / 2, -bodyH / 2, bodyW, bodyH);
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(-bodyW / 2, -bodyH / 2, bodyW, bodyH);
+
+        // Turret (large circle)
+        const turretR = s * 0.34;
+        const turretGrad = ctx.createRadialGradient(-turretR * 0.3, -turretR * 0.3, turretR * 0.2, 0, 0, turretR);
+        turretGrad.addColorStop(0, bodyLight);
+        turretGrad.addColorStop(1, bodyDark);
+        ctx.fillStyle = turretGrad;
+        ctx.beginPath();
+        ctx.arc(0, 0, turretR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Long thick barrel (pointing right in local frame)
+        const barrelLen = s * 0.95;
+        const barrelW = s * 0.18;
+        ctx.fillStyle = bodyDark;
+        ctx.fillRect(turretR * 0.6, -barrelW / 2, barrelLen, barrelW);
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(turretR * 0.6, -barrelW / 2, barrelLen, barrelW);
+
+        // Muzzle brake ring
+        ctx.fillStyle = '#111';
+        const muzzleX = turretR * 0.6 + barrelLen;
+        ctx.fillRect(muzzleX - s * 0.1, -barrelW * 0.75, s * 0.1, barrelW * 1.5);
+        ctx.strokeStyle = '#000';
+        ctx.strokeRect(muzzleX - s * 0.1, -barrelW * 0.75, s * 0.1, barrelW * 1.5);
+
+    } else if (tankClassSafe === 'light') {
+        // ===== LIGHT TANK =====
+        // Smaller angled body (diamond-ish front), thin short barrel, rear exhaust vents
+        const bodyW = s * 0.85;
+        const bodyH = s * 0.7;
+        const treadW = bodyW * 0.95;
+        const treadH = s * 0.16;
+
+        // Thin treads
+        ctx.fillStyle = treadColor;
+        ctx.fillRect(-treadW / 2, -bodyH / 2 - treadH * 0.4, treadW, treadH);
+        ctx.fillRect(-treadW / 2, bodyH / 2 - treadH * 0.6, treadW, treadH);
+        ctx.strokeStyle = treadHighlight;
+        ctx.lineWidth = 1;
+        for (let i = -3; i <= 3; i++) {
+            const x = i * (treadW / 7);
+            ctx.beginPath();
+            ctx.moveTo(x, -bodyH / 2 - treadH * 0.4);
+            ctx.lineTo(x, -bodyH / 2 + treadH * 0.6);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(x, bodyH / 2 - treadH * 0.6);
+            ctx.lineTo(x, bodyH / 2 + treadH * 0.4);
+            ctx.stroke();
+        }
+
+        // Angled diamond-ish body
+        const grad = ctx.createLinearGradient(0, -bodyH / 2, 0, bodyH / 2);
+        grad.addColorStop(0, bodyLight);
+        grad.addColorStop(1, bodyDark);
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.moveTo(bodyW / 2, 0);                            // front tip
+        ctx.lineTo(bodyW * 0.25, -bodyH / 2);                // top-front corner
+        ctx.lineTo(-bodyW / 2, -bodyH / 2);                  // top-rear
+        ctx.lineTo(-bodyW / 2, bodyH / 2);                   // bottom-rear
+        ctx.lineTo(bodyW * 0.25, bodyH / 2);                 // bottom-front corner
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Rear exhaust vents (two small dark stripes on the back)
+        ctx.fillStyle = '#111';
+        ctx.fillRect(-bodyW / 2 - 1, -bodyH * 0.25, s * 0.12, s * 0.12);
+        ctx.fillRect(-bodyW / 2 - 1, bodyH * 0.13, s * 0.12, s * 0.12);
+
+        // Small turret (low profile)
+        const turretR = s * 0.24;
+        const turretGrad = ctx.createRadialGradient(-turretR * 0.3, -turretR * 0.3, turretR * 0.2, 0, 0, turretR);
+        turretGrad.addColorStop(0, bodyLight);
+        turretGrad.addColorStop(1, bodyDark);
+        ctx.fillStyle = turretGrad;
+        ctx.beginPath();
+        ctx.arc(0, 0, turretR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Thin short barrel
+        const barrelLen = s * 0.65;
+        const barrelW = s * 0.1;
+        ctx.fillStyle = bodyDark;
+        ctx.fillRect(turretR * 0.6, -barrelW / 2, barrelLen, barrelW);
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(turretR * 0.6, -barrelW / 2, barrelLen, barrelW);
+
+    } else {
+        // ===== ARMORED TANK =====
+        // Wider heavy body, thick treads, bolted plates (rivets), short stubby boxy turret
+        const bodyW = s * 1.0;
+        const bodyH = s * 1.0;
+        const treadW = bodyW * 1.05;
+        const treadH = s * 0.28;
+
+        // Thick treads
+        ctx.fillStyle = treadColor;
+        ctx.fillRect(-treadW / 2, -bodyH / 2 - treadH * 0.7, treadW, treadH);
+        ctx.fillRect(-treadW / 2, bodyH / 2 - treadH * 0.3, treadW, treadH);
+        ctx.strokeStyle = treadHighlight;
+        ctx.lineWidth = 1.5;
+        for (let i = -5; i <= 5; i++) {
+            const x = i * (treadW / 11);
+            ctx.beginPath();
+            ctx.moveTo(x, -bodyH / 2 - treadH * 0.7);
+            ctx.lineTo(x, -bodyH / 2 + treadH * 0.3);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(x, bodyH / 2 - treadH * 0.3);
+            ctx.lineTo(x, bodyH / 2 + treadH * 0.7);
+            ctx.stroke();
+        }
+
+        // Heavy body with gradient
+        const grad = ctx.createLinearGradient(0, -bodyH / 2, 0, bodyH / 2);
+        grad.addColorStop(0, bodyLight);
+        grad.addColorStop(1, bodyDark);
+        ctx.fillStyle = grad;
+        ctx.fillRect(-bodyW / 2, -bodyH / 2, bodyW, bodyH);
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(-bodyW / 2, -bodyH / 2, bodyW, bodyH);
+
+        // Rivets (small dark circles on 4 corners)
+        ctx.fillStyle = '#111';
+        const rivetR = s * 0.06;
+        const rivetInset = s * 0.14;
+        [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([sx, sy]) => {
+            ctx.beginPath();
+            ctx.arc(sx * (bodyW / 2 - rivetInset), sy * (bodyH / 2 - rivetInset), rivetR, 0, Math.PI * 2);
+            ctx.fill();
+        });
+
+        // Boxy turret
+        const turretSize = s * 0.55;
+        const turretGrad = ctx.createLinearGradient(0, -turretSize / 2, 0, turretSize / 2);
+        turretGrad.addColorStop(0, bodyLight);
+        turretGrad.addColorStop(1, bodyDark);
+        ctx.fillStyle = turretGrad;
+        ctx.fillRect(-turretSize / 2, -turretSize / 2, turretSize, turretSize);
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(-turretSize / 2, -turretSize / 2, turretSize, turretSize);
+
+        // Short stubby barrel
+        const barrelLen = s * 0.6;
+        const barrelW = s * 0.22;
+        ctx.fillStyle = bodyDark;
+        ctx.fillRect(turretSize * 0.4, -barrelW / 2, barrelLen, barrelW);
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(turretSize * 0.4, -barrelW / 2, barrelLen, barrelW);
+    }
+
+    ctx.restore();
+}
+
 // Game state
 let myPlayerId = null;
 let myPlayerName = null;
@@ -151,6 +392,11 @@ socket.on('captain_selected', (data) => {
     showNotification(`👑 ${data.player_name} is now the CAPTAIN! (+50% speed, 2-fan bullets, +50% fire rate)`, '#FFD700');
 });
 
+socket.on('captain_targeted', (data) => {
+    const reward = data.reward || 1000;
+    showNotification(`🎯 ${data.player_name} is the CAPTAIN! Kill him to get ${reward} points`, '#FF3030');
+});
+
 socket.on('laser_warning', (data) => {
     const player = gameState.players.find(p => p.id === data.player_id);
     if (player) {
@@ -259,19 +505,44 @@ socket.on('game_over', (data) => {
 });
 
 // Join game
+// Welcome-screen tank preview rendering
+function renderTankPreviews() {
+    const color = (document.querySelector('input[name="tank-color"]:checked') || {}).value || '#32CD32';
+    document.querySelectorAll('.tank-preview-canvas').forEach(cv => {
+        const pctx = cv.getContext('2d');
+        pctx.clearRect(0, 0, cv.width, cv.height);
+        // Draw tank centered, pointing right, slightly larger than in-game for readability
+        drawTankByClass(pctx, cv.width / 2, cv.height / 2, 0, color, cv.dataset.class, 58);
+    });
+}
+
+// Re-render previews when color or tank-class selection changes
+document.querySelectorAll('input[name="tank-color"]').forEach(el => {
+    el.addEventListener('change', renderTankPreviews);
+});
+document.querySelectorAll('input[name="tank-class"]').forEach(el => {
+    el.addEventListener('change', renderTankPreviews);
+});
+// Initial render
+window.addEventListener('load', renderTankPreviews);
+// Also render immediately in case 'load' already fired
+renderTankPreviews();
+
 joinButton.addEventListener('click', () => {
     const name = playerNameInput.value.trim() || 'Anonymous';
     const selectedMode = document.querySelector('input[name="game-mode"]:checked').value;
     const selectedMap = document.querySelector('input[name="map-type"]:checked').value;
-    const selectedColor = document.getElementById('tank-color').value;
-    const selectedIcon = document.querySelector('input[name="tank-icon"]:checked').value;
-    const selectedSkill = document.querySelector('input[name="skill"]:checked').value;
+    const selectedColor = (document.querySelector('input[name="tank-color"]:checked') || {}).value || '#32CD32';
+    const selectedClass = (document.querySelector('input[name="tank-class"]:checked') || {}).value || 'gun';
+    // Tank class determines the ultimate skill (fixed pairing)
+    const classToSkill = { gun: 'laser_beam', light: 'speed_demon', armored: 'ghost_mode' };
+    const selectedSkill = classToSkill[selectedClass] || 'laser_beam';
     socket.emit('join_game', {
         name: name,
         game_mode: selectedMode,
         map_type: selectedMap,
         color: selectedColor,
-        icon: selectedIcon,
+        tank_class: selectedClass,
         skill: selectedSkill
     });
 });
@@ -1252,6 +1523,62 @@ function draw() {
             ctx.fillText('❄️ EXHAUSTED ❄️', player.x, player.y - TANK_SIZE - 35);
         }
 
+        // "Hunt the Captain" targeting effect (triggered every 30s server-side)
+        if (player.captain_targeted && player.alive) {
+            ctx.save();
+            const t = Date.now() / 200;
+            const pulse = Math.sin(t) * 0.35 + 0.65;
+
+            // Outer pulsing glow
+            ctx.shadowColor = '#FF0000';
+            ctx.shadowBlur = 40 * pulse;
+
+            // Rotating red reticle rings
+            const baseRadius = TANK_SIZE + 10;
+            for (let ring = 0; ring < 3; ring++) {
+                const r = baseRadius + ring * 6 + Math.sin(t + ring) * 3;
+                ctx.strokeStyle = `rgba(255, 40, 40, ${pulse * (0.9 - ring * 0.2)})`;
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(player.x, player.y, r, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+
+            // Crosshair brackets (4 corner arcs) that rotate slowly
+            const rot = t * 0.5;
+            ctx.strokeStyle = `rgba(255, 0, 0, ${pulse})`;
+            ctx.lineWidth = 4;
+            const bracketRadius = baseRadius + 14;
+            for (let i = 0; i < 4; i++) {
+                const start = rot + i * (Math.PI / 2) - 0.35;
+                const end = rot + i * (Math.PI / 2) + 0.35;
+                ctx.beginPath();
+                ctx.arc(player.x, player.y, bracketRadius, start, end);
+                ctx.stroke();
+            }
+
+            // Crosshair lines through the tank (N/S/E/W tick marks)
+            ctx.strokeStyle = `rgba(255, 60, 60, ${pulse * 0.9})`;
+            ctx.lineWidth = 2;
+            const tickInner = baseRadius - 4;
+            const tickOuter = baseRadius + 18;
+            for (let i = 0; i < 4; i++) {
+                const a = rot + i * (Math.PI / 2);
+                ctx.beginPath();
+                ctx.moveTo(player.x + Math.cos(a) * tickInner, player.y + Math.sin(a) * tickInner);
+                ctx.lineTo(player.x + Math.cos(a) * tickOuter, player.y + Math.sin(a) * tickOuter);
+                ctx.stroke();
+            }
+
+            // Bounty label above the tank
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#FF3030';
+            ctx.font = 'bold 13px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('🎯 +1000 BOUNTY 🎯', player.x, player.y - TANK_SIZE - 40);
+            ctx.restore();
+        }
+
         // Add visual effects for active skills
         if (player.skill_active && player.alive) {
             if (player.skill === 'speed_demon') {
@@ -1317,56 +1644,8 @@ function draw() {
             }
         }
 
-        // Draw tank body (SQUARE)
-        ctx.fillStyle = player.color;
-        ctx.fillRect(
-            player.x - TANK_SIZE / 2,
-            player.y - TANK_SIZE / 2,
-            TANK_SIZE,
-            TANK_SIZE
-        );
-        ctx.strokeStyle = '#000000';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(
-            player.x - TANK_SIZE / 2,
-            player.y - TANK_SIZE / 2,
-            TANK_SIZE,
-            TANK_SIZE
-        );
-
-        // Draw custom icon on tank body
-        if (player.icon) {
-            ctx.fillStyle = '#FFFFFF';
-            ctx.font = 'bold 18px Arial';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(player.icon, player.x, player.y);
-        }
-
-        // Draw tank turret (line pointing in direction)
-        if (player.alive) {
-            ctx.strokeStyle = player.color;
-            ctx.lineWidth = 6;
-            ctx.beginPath();
-            ctx.moveTo(player.x, player.y);
-            ctx.lineTo(
-                player.x + Math.cos(player.angle) * (TANK_SIZE / 2 + 10),
-                player.y + Math.sin(player.angle) * (TANK_SIZE / 2 + 10)
-            );
-            ctx.stroke();
-
-            // Draw turret tip
-            ctx.fillStyle = '#000000';
-            ctx.beginPath();
-            ctx.arc(
-                player.x + Math.cos(player.angle) * (TANK_SIZE / 2 + 10),
-                player.y + Math.sin(player.angle) * (TANK_SIZE / 2 + 10),
-                3,
-                0,
-                Math.PI * 2
-            );
-            ctx.fill();
-        }
+        // Draw the tank using its class-specific renderer (body, turret, barrel)
+        drawTankByClass(ctx, player.x, player.y, player.angle || 0, player.color, player.tank_class, TANK_SIZE);
 
         // Reset shadow effect
         ctx.shadowBlur = 0;

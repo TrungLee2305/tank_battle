@@ -844,6 +844,136 @@ body {
     }
 }
 
+/* Tank class picker (3 cards: Gun / Light / Armored) */
+.tank-class-options {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    margin: 10px 0 18px 0;
+}
+
+.tank-class-option {
+    flex: 1;
+    max-width: 180px;
+    cursor: pointer;
+}
+
+.tank-class-option input[type="radio"] {
+    display: none;
+}
+
+.tank-class-card {
+    background: rgba(255, 255, 255, 0.05);
+    border: 2px solid rgba(255, 215, 0, 0.3);
+    border-radius: 10px;
+    padding: 10px 8px;
+    text-align: center;
+    transition: transform 0.15s, border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.tank-class-option:hover .tank-class-card {
+    transform: translateY(-2px);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.tank-class-option input[type="radio"]:checked + .tank-class-card {
+    border-color: #FFD700;
+    background: rgba(255, 215, 0, 0.12);
+    box-shadow: 0 0 15px rgba(255, 215, 0, 0.4);
+    transform: translateY(-2px);
+}
+
+.tank-preview-canvas {
+    display: block;
+    margin: 0 auto 6px auto;
+    background: radial-gradient(circle at center, #2a2a2a 0%, #1a1a1a 100%);
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.tank-class-card strong {
+    display: block;
+    color: #FFD700;
+    font-size: 14px;
+    margin-bottom: 4px;
+}
+
+.tank-class-desc {
+    color: #cccccc;
+    font-size: 11px;
+    margin: 2px 0;
+    min-height: 14px;
+}
+
+.tank-class-ult {
+    color: #FFA500;
+    font-size: 11px;
+    font-weight: bold;
+    margin-top: 4px;
+}
+
+/* Color swatches (5 presets) */
+.color-selection {
+    text-align: center;
+    margin: 10px 0;
+}
+
+.color-selection > label {
+    display: block;
+    color: #FFD700;
+    font-weight: bold;
+    margin-bottom: 8px;
+    font-size: 14px;
+}
+
+.color-swatches {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}
+
+.color-swatch {
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.color-swatch input[type="radio"] {
+    display: none;
+}
+
+.swatch-display {
+    display: block;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 3px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+    transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+.color-swatch:hover .swatch-display {
+    transform: scale(1.1);
+}
+
+.color-swatch input[type="radio"]:checked + .swatch-display {
+    border-color: #FFD700;
+    box-shadow: 0 0 12px rgba(255, 215, 0, 0.8);
+    transform: scale(1.15);
+}
+
+.swatch-label {
+    color: #aaaaaa;
+    font-size: 10px;
+}
+
+.color-swatch input[type="radio"]:checked ~ .swatch-label {
+    color: #FFD700;
+    font-weight: bold;
+}
+
 /* Emoji picker overlay (opened with T, ←/→ to select, T again to send) */
 .emoji-picker {
     position: absolute;
