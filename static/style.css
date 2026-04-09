@@ -843,3 +843,61 @@ body {
         border-top: 3px solid #FFD700;
     }
 }
+
+/* Emoji picker overlay (opened with T, ←/→ to select, T again to send) */
+.emoji-picker {
+    position: absolute;
+    left: 50%;
+    bottom: 30px;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.85);
+    border: 2px solid #FFD700;
+    border-radius: 12px;
+    padding: 12px 16px;
+    box-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
+    z-index: 100;
+    user-select: none;
+    pointer-events: none;
+}
+
+.emoji-picker-title {
+    color: #FFD700;
+    font-weight: bold;
+    font-size: 13px;
+    text-align: center;
+    margin-bottom: 8px;
+    letter-spacing: 1px;
+}
+
+.emoji-picker-list {
+    display: flex;
+    gap: 6px;
+    justify-content: center;
+}
+
+.emoji-picker-item {
+    font-size: 28px;
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 2px solid transparent;
+    transition: transform 0.1s, border-color 0.1s, background 0.1s;
+}
+
+.emoji-picker-item.selected {
+    background: rgba(255, 215, 0, 0.2);
+    border-color: #FFD700;
+    transform: scale(1.2);
+    box-shadow: 0 0 12px rgba(255, 215, 0, 0.7);
+}
+
+.emoji-picker-hint {
+    color: #aaaaaa;
+    font-size: 11px;
+    text-align: center;
+    margin-top: 8px;
+}

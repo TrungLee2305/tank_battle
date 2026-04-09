@@ -155,10 +155,27 @@ CAPTAIN_INTERVAL = 60  # seconds between captain selections (NOT USED - captain 
 CAPTAIN_SPEED_MULTIPLIER = 1.5  # 50% speed increase
 CAPTAIN_FIRE_RATE_MULTIPLIER = 1.5  # 50% faster firing (cooldown reduced by 33%)
 CAPTAIN_KILL_REWARD = 1000  # Points for killing the captain
+CAPTAIN_TARGET_INTERVAL = 30     # Seconds between "target the captain" pulses
+CAPTAIN_TARGET_DURATION = 5.0    # Seconds the targeting visual stays on the captain
 
 # Ricochet System constants
 RICOCHET_SCORE_1 = 500  # Score needed for 1 ricochet
 RICOCHET_SCORE_2 = 1000  # Score needed for 2 ricochets
+
+# Emoji display (Press T to cycle)
+EMOJI_LIST = [
+    '😁',  # Happy
+    '😢',  # Sad
+    '😡',  # Angry
+    '😲',  # Surprised
+    '🤣',  # Laughing hard
+    '🙈',  # Embarrassed
+    '😍',  # Love / adore
+    '😫',  # Tired
+    '🤔',  # Thinking
+    '😏',  # Cool / confident
+]
+EMOJI_DISPLAY_DURATION = 5.0  # seconds an emoji stays visible above the tank
 
 # Ultimate Skill constants
 SKILL_COOLDOWN = 30  # seconds cooldown (starts after skill ends)
@@ -1842,6 +1859,9 @@ def create_tank(player_id: str, name: str, color: str = None, icon: str = None, 
         'bomb_freeze_end': 0,  # When freeze phase ends
         'is_captain': False,  # Whether this tank is the current captain
         'team': team,  # Team assignment ('red', 'blue', or None)
+        # Emoji display (Press T to open picker client-side, T again to send)
+        'emoji': None,              # Currently displayed emoji (None if not showing)
+        'emoji_end_time': 0,        # Unix time when the displayed emoji expires
         'keys': {
             'w': False,
             'a': False,
@@ -1915,6 +1935,8 @@ def create_bot(bot_name: str, team: str = None) -> tuple:
         'bomb_freeze_end': 0,  # When freeze phase ends
         'is_captain': False,  # Whether this bot is the current captain
         'team': team,  # Team assignment for Duel mode
+        'emoji': None,
+        'emoji_end_time': 0,
         'keys': {
             'w': False,
             'a': False,
@@ -2785,7 +2807,14 @@ def game_loop():
                         'bomb_freezing': t.get('bomb_freezing', False),  # Post-detonation freeze
                         'is_captain': t.get('is_captain', False),  # Captain status
                         'is_bot': t.get('is_bot', False),  # Identify bots
-                        'team': t.get('team')  # Team assignment (red, blue, or None)
+                        'team': t.get('team'),  # Team assignment (red, blue, or None)
+                        # Emoji display: only send while alive and not expired
+                        'emoji': (
+                            t.get('emoji')
+                            if (t.get('alive') and t.get('emoji')
+                                and time.time() < t.get('emoji_end_time', 0))
+                            else None
+                        )
                     }
                     for t in players.values()
                 ],
@@ -3148,6 +3177,31 @@ def detonate_atomic_bomb(player_id: str, tank: dict):
         'kills': kills_count,
         'victims': victims
     })
+
+
+@socketio.on('show_emoji')
+def handle_show_emoji(data):
+    """Handle the player confirming an emoji from the picker.
+
+    Client opens a picker with T, navigates with arrow keys, then presses T
+    again to broadcast their chosen emoji to all players via game_state.
+    """
+    player_id = request.sid
+
+    if player_id not in players:
+        return
+
+    tank = players[player_id]
+    if not tank.get('alive', False):
+        return
+
+    chosen = data.get('emoji') if isinstance(data, dict) else None
+    # Only accept emojis from the official list (server-side validation)
+    if chosen not in EMOJI_LIST:
+        return
+
+    tank['emoji'] = chosen
+    tank['emoji_end_time'] = time.time() + EMOJI_DISPLAY_DURATION
 
 
 @socketio.on('activate_atomic_bomb')

@@ -285,8 +285,83 @@ playerNameInput.addEventListener('keypress', (e) => {
 // Keyboard controls
 const keys = { w: false, a: false, s: false, d: false };
 
+// Emoji picker state (T to open, ←/→ to select, T again to send, Esc to cancel)
+const EMOJI_OPTIONS = ['😁', '😢', '😡', '😲', '🤣', '🙈', '😍', '😫', '🤔', '😏'];
+let emojiPickerOpen = false;
+let emojiPickerIndex = 0;          // currently highlighted emoji
+let emojiLastUsedIndex = 0;        // remembers the last emoji the player sent
+
+function buildEmojiPicker() {
+    const list = document.getElementById('emoji-picker-list');
+    if (!list || list.childElementCount > 0) return;
+    EMOJI_OPTIONS.forEach((em, i) => {
+        const cell = document.createElement('div');
+        cell.className = 'emoji-picker-item';
+        cell.textContent = em;
+        cell.dataset.index = i;
+        list.appendChild(cell);
+    });
+}
+
+function refreshEmojiPickerHighlight() {
+    const cells = document.querySelectorAll('#emoji-picker-list .emoji-picker-item');
+    cells.forEach((el, i) => {
+        el.classList.toggle('selected', i === emojiPickerIndex);
+    });
+}
+
+function openEmojiPicker() {
+    buildEmojiPicker();
+    emojiPickerOpen = true;
+    emojiPickerIndex = emojiLastUsedIndex;  // default to last-used
+    const picker = document.getElementById('emoji-picker');
+    if (picker) picker.style.display = 'block';
+    refreshEmojiPickerHighlight();
+}
+
+function closeEmojiPicker() {
+    emojiPickerOpen = false;
+    const picker = document.getElementById('emoji-picker');
+    if (picker) picker.style.display = 'none';
+}
+
+function sendSelectedEmoji() {
+    const chosen = EMOJI_OPTIONS[emojiPickerIndex];
+    emojiLastUsedIndex = emojiPickerIndex;  // remember for next time
+    socket.emit('show_emoji', { emoji: chosen });
+    closeEmojiPicker();
+}
+
 document.addEventListener('keydown', (e) => {
     const key = e.key.toLowerCase();
+
+    // Emoji picker takes keyboard priority while open
+    if (emojiPickerOpen) {
+        if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            emojiPickerIndex = (emojiPickerIndex - 1 + EMOJI_OPTIONS.length) % EMOJI_OPTIONS.length;
+            refreshEmojiPickerHighlight();
+            return;
+        }
+        if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            emojiPickerIndex = (emojiPickerIndex + 1) % EMOJI_OPTIONS.length;
+            refreshEmojiPickerHighlight();
+            return;
+        }
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            sendSelectedEmoji();
+            return;
+        }
+        if (e.key === 'Escape' || key === 't') {
+            e.preventDefault();
+            closeEmojiPicker();
+            return;
+        }
+        // Swallow other game keys while picker is open so the tank doesn't move
+        return;
+    }
 
     if (key in keys && keys[key] === false) {
         keys[key] = true;
@@ -309,6 +384,12 @@ document.addEventListener('keydown', (e) => {
     if (key === 'x') {
         e.preventDefault();
         socket.emit('activate_atomic_bomb');
+    }
+
+    // Open the emoji picker with 'T'
+    if (key === 't') {
+        e.preventDefault();
+        openEmojiPicker();
     }
 });
 
@@ -1335,11 +1416,13 @@ function draw() {
         }
 
         // Add team indicator in Duel mode
+        let topOffset = captainOffset;
         if (gameState.game_mode === 'duel' && player.team) {
             const teamLabel = player.team === 'red' ? '[RED]' : '[BLUE]';
             const teamColor = player.team === 'red' ? '#FF0000' : '#0000FF';
             ctx.fillStyle = teamColor;
             ctx.fillText(teamLabel, player.x, barY - 18 - captainOffset);
+            topOffset = captainOffset + 13;  // team label takes extra vertical space
             ctx.fillStyle = player.color;
             ctx.font = 'bold 12px Arial';
             ctx.fillText(nameDisplay, player.x, barY - 5);
@@ -1347,6 +1430,13 @@ function draw() {
             ctx.fillStyle = player.color;
             ctx.font = 'bold 12px Arial';
             ctx.fillText(nameDisplay, player.x, barY - 5);
+        }
+
+        // Draw emoji above everything (captain / team label / name)
+        if (player.emoji) {
+            ctx.font = '22px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(player.emoji, player.x, barY - 22 - topOffset);
         }
 
         // Highlight own tank with square border
