@@ -102,6 +102,8 @@ shield_drop: dict = None  # Current shield drop on map (None if no shield active
 last_shield_drop_time: float = 0  # Last time shield drop spawned
 atomic_bomb: dict = None  # Current atomic bomb on map (None if no bomb active)
 last_atomic_bomb_time: float = 0  # Last time atomic bomb spawned
+current_captain_id: str = None  # ID of current captain (None if no captain)
+last_captain_time: float = 0  # Last time captain was selected
 game_running = False
 terrain_generated = False
 
@@ -147,6 +149,16 @@ ATOMIC_BOMB_INTERVAL = 60  # seconds between atomic bomb spawns
 ATOMIC_BOMB_SIZE = 40  # Size of atomic bomb visual
 ATOMIC_BOMB_PREPARATION = 3.0  # seconds preparation phase (warning, frozen in place)
 ATOMIC_BOMB_FREEZE = 2.0  # seconds post-detonation frozen phase
+
+# Captain System constants
+CAPTAIN_INTERVAL = 60  # seconds between captain selections (NOT USED - captain selected immediately on death)
+CAPTAIN_SPEED_MULTIPLIER = 1.5  # 50% speed increase
+CAPTAIN_FIRE_RATE_MULTIPLIER = 1.5  # 50% faster firing (cooldown reduced by 33%)
+CAPTAIN_KILL_REWARD = 1000  # Points for killing the captain
+
+# Ricochet System constants
+RICOCHET_SCORE_1 = 500  # Score needed for 1 ricochet
+RICOCHET_SCORE_2 = 1000  # Score needed for 2 ricochets
 
 # Ultimate Skill constants
 SKILL_COOLDOWN = 30  # seconds cooldown (starts after skill ends)
@@ -1297,6 +1309,40 @@ def spawn_atomic_bomb():
     print(f'💣 ATOMIC BOMB spawned at ({int(atomic_bomb["x"])}, {int(atomic_bomb["y"])})!')
 
 
+def select_captain():
+    """Select a random alive player/bot as the captain"""
+    global current_captain_id, last_captain_time
+
+    # Get all alive players (including bots)
+    alive_tanks = [pid for pid, tank in players.items() if tank['alive']]
+
+    if not alive_tanks:
+        print('⚠️ No alive tanks to select as captain')
+        return
+
+    # Randomly select a captain
+    new_captain_id = random.choice(alive_tanks)
+
+    # Remove captain status from previous captain
+    if current_captain_id and current_captain_id in players:
+        players[current_captain_id]['is_captain'] = False
+        print(f'👑 {players[current_captain_id]["name"]} is no longer captain')
+
+    # Set new captain
+    current_captain_id = new_captain_id
+    players[new_captain_id]['is_captain'] = True
+    last_captain_time = time.time()
+
+    captain_name = players[new_captain_id]['name']
+    print(f'👑 {captain_name} has been selected as CAPTAIN! (+50% speed, 2-fan bullets, +50% fire rate)')
+
+    # Broadcast captain selection
+    socketio.emit('captain_selected', {
+        'player_id': new_captain_id,
+        'player_name': captain_name
+    })
+
+
 def check_atomic_bomb_collection(tank: dict):
     """Check if tank collected the atomic bomb"""
     global atomic_bomb
@@ -1606,12 +1652,24 @@ def update_skills():
                     tank['kills'] += 1
                     tank['score'] += 100
 
+                    # Check if target was captain and remove status
+                    was_captain = target.get('is_captain', False)
+                    if was_captain:
+                        target['is_captain'] = False
+                        global current_captain_id
+                        current_captain_id = None
+                        print(f'👑🔴 Captain {target["name"]} killed by laser beam - status removed!')
+
                     socketio.emit('tank_destroyed', {
                         'victim_id': target_id,
                         'victim_name': target['name'],
                         'killer_id': player_id,
                         'killer_name': tank['name']
                     })
+
+                    # If captain was killed, select new one immediately
+                    if was_captain:
+                        select_captain()
 
         # Check if skill duration ended
         if tank['skill_active'] and current_time >= tank['skill_end_time']:
@@ -1782,6 +1840,7 @@ def create_tank(player_id: str, name: str, color: str = None, icon: str = None, 
         'bomb_preparation_end': 0,  # When preparation ends and bomb detonates
         'bomb_freezing': False,  # Post-detonation freeze phase
         'bomb_freeze_end': 0,  # When freeze phase ends
+        'is_captain': False,  # Whether this tank is the current captain
         'team': team,  # Team assignment ('red', 'blue', or None)
         'keys': {
             'w': False,
@@ -1854,6 +1913,7 @@ def create_bot(bot_name: str, team: str = None) -> tuple:
         'bomb_preparation_end': 0,  # When preparation ends and bomb detonates
         'bomb_freezing': False,  # Post-detonation freeze phase
         'bomb_freeze_end': 0,  # When freeze phase ends
+        'is_captain': False,  # Whether this bot is the current captain
         'team': team,  # Team assignment for Duel mode
         'keys': {
             'w': False,
@@ -2055,6 +2115,10 @@ def update_tank_movement(tank: dict):
         if 'speed_boost' in tank['powerups']:
             speed = TANK_SPEED * SPEED_BOOST_MULTIPLIER
 
+        # Apply Captain buff (+50% speed)
+        if tank.get('is_captain', False):
+            speed = TANK_SPEED * CAPTAIN_SPEED_MULTIPLIER
+
         # Apply Speed Demon ultimate skill boost (400% = 5x speed)
         if tank['skill_active'] and tank['skill'] == 'speed_demon':
             speed = TANK_SPEED * SKILL_SPEED_DEMON_SPEED_MULT
@@ -2191,10 +2255,28 @@ def update_bullets(current_time):
             bullets_to_remove.append(bullet)
             continue
 
-        # Check collision with ramparts
+        # Check collision with ramparts - WITH RICOCHET!
         if check_terrain_collision(bullet['x'] - BULLET_SIZE/2, bullet['y'] - BULLET_SIZE/2, BULLET_SIZE, BULLET_SIZE):
-            bullets_to_remove.append(bullet)
-            continue
+            # Check if bullet can ricochet
+            if bullet.get('ricochets_left', 0) > 0:
+                # RICOCHET! Reflect bullet velocity
+                # Simple reflection: reverse both vx and vy (rough but effective)
+                bullet['vx'] = -bullet['vx']
+                bullet['vy'] = -bullet['vy']
+                bullet['ricochets_left'] -= 1
+
+                # Move bullet away from wall to prevent getting stuck
+                bullet['x'] += bullet['vx'] * 2
+                bullet['y'] += bullet['vy'] * 2
+
+                print(f'🔀 Bullet ricochet! {bullet["ricochets_left"]} bounces left')
+            else:
+                # No ricochets left, remove bullet
+                bullets_to_remove.append(bullet)
+                continue
+        else:
+            # Not colliding with wall, continue
+            pass
 
         # Check collision with snake
         if snake is not None and snake['health'] > 0:
@@ -2365,10 +2447,34 @@ def update_bullets(current_time):
                     tank['bomb_freezing'] = False
                     tank['bomb_freeze_end'] = 0
 
+                    # Check if killed tank was captain BEFORE removing status
+                    was_captain = tank.get('is_captain', False)
+
+                    # Remove captain status on death
+                    if was_captain:
+                        tank['is_captain'] = False
+                        global current_captain_id
+                        current_captain_id = None
+                        print(f'👑💀 Captain {tank["name"]} died - captain status removed!')
+
                     # Award kill to shooter
                     if bullet['owner_id'] in players:
-                        players[bullet['owner_id']]['kills'] += 1
-                        players[bullet['owner_id']]['score'] += 100
+                        shooter = players[bullet['owner_id']]
+                        shooter['kills'] += 1
+
+                        # Check if killed tank was captain (bonus +1000 points)
+                        if was_captain:
+                            shooter['score'] += 100 + CAPTAIN_KILL_REWARD  # 1100 total
+                            print(f'👑💀 {shooter["name"]} killed CAPTAIN {tank["name"]}! +{100 + CAPTAIN_KILL_REWARD} points!')
+
+                            # Broadcast captain kill
+                            socketio.emit('captain_killed', {
+                                'killer_id': shooter['id'],
+                                'killer_name': shooter['name'],
+                                'victim_name': tank['name']
+                            })
+                        else:
+                            shooter['score'] += 100
 
                         # Update team kills in Duel mode
                         if current_game_mode == GAME_MODE_DUEL:
@@ -2385,6 +2491,10 @@ def update_bullets(current_time):
                         'killer_id': bullet['owner_id'],
                         'killer_name': players[bullet['owner_id']]['name'] if bullet['owner_id'] in players else 'Unknown'
                     })
+
+                    # If captain died, immediately select a new one
+                    if was_captain:
+                        select_captain()
 
                 break
 
@@ -2406,6 +2516,13 @@ def create_bullet(tank: dict, target_angle: float) -> dict:
         damage *= 2
         print(f'⚔️ SNAKE SLAYER buff active for {tank["name"]}! Damage: {damage}')
 
+    # Calculate max ricochets based on score
+    max_ricochets = 0
+    if tank['score'] >= RICOCHET_SCORE_2:
+        max_ricochets = 2
+    elif tank['score'] >= RICOCHET_SCORE_1:
+        max_ricochets = 1
+
     return {
         'x': tank['x'] + math.cos(target_angle) * TANK_SIZE,
         'y': tank['y'] + math.sin(target_angle) * TANK_SIZE,
@@ -2413,13 +2530,15 @@ def create_bullet(tank: dict, target_angle: float) -> dict:
         'vy': math.sin(target_angle) * BULLET_SPEED,
         'owner_id': tank['id'],
         'damage': damage,
-        'lifetime': BULLET_LIFETIME
+        'lifetime': BULLET_LIFETIME,
+        'ricochets_left': max_ricochets,  # Number of ricochets remaining
+        'max_ricochets': max_ricochets  # For visual display
     }
 
 
 def game_loop():
     """Main game loop that runs on the server"""
-    global game_running, last_super_drop_time, snake, last_snake_time, shield_drop, last_shield_drop_time, atomic_bomb, last_atomic_bomb_time
+    global game_running, last_super_drop_time, snake, last_snake_time, shield_drop, last_shield_drop_time, atomic_bomb, last_atomic_bomb_time, current_captain_id, last_captain_time
     game_running = True
 
     while game_running:
@@ -2457,6 +2576,11 @@ def game_loop():
                 if last_atomic_bomb_time == 0 or (current_time - last_atomic_bomb_time >= ATOMIC_BOMB_INTERVAL):
                     if atomic_bomb is None:  # Only spawn if no bomb is active
                         spawn_atomic_bomb()
+
+            # Check if we need to select initial captain or if no captain exists
+            if terrain_generated and current_captain_id is None:
+                # Select a captain if there isn't one (first time or after captain death with no replacement)
+                select_captain()
 
             # Update power-up timers
             update_powerups()
@@ -2530,11 +2654,22 @@ def game_loop():
                         tank['bomb_freezing'] = False
                         tank['bomb_freeze_end'] = 0
 
+                        # Remove captain status on death by snake
+                        was_captain = tank.get('is_captain', False)
+                        if was_captain:
+                            tank['is_captain'] = False
+                            current_captain_id = None
+                            print(f'👑🐍 Captain {tank["name"]} killed by snake - status removed!')
+
                         socketio.emit('death', {
                             'id': player_id,
                             'killer': 'Snake',
                             'killed': tank['name']
                         })
+
+                        # If captain died, immediately select a new one
+                        if was_captain:
+                            select_captain()
                 else:
                     # Handle respawn timer
                     if tank['respawn_timer'] > 0:
@@ -2624,6 +2759,7 @@ def game_loop():
                         'bomb_preparing': t.get('bomb_preparing', False),  # Atomic bomb preparation phase
                         'bomb_preparation_time_left': max(0, t.get('bomb_preparation_end', 0) - time.time()) if t.get('bomb_preparing', False) else 0,
                         'bomb_freezing': t.get('bomb_freezing', False),  # Post-detonation freeze
+                        'is_captain': t.get('is_captain', False),  # Captain status
                         'is_bot': t.get('is_bot', False),  # Identify bots
                         'team': t.get('team')  # Team assignment (red, blue, or None)
                     }
@@ -2813,25 +2949,37 @@ def handle_shoot():
             # Check for stacked power-ups
             has_fan_shot = 'fan_shot' in tank['powerups']
             has_fast_fire = 'fast_fire' in tank['powerups']
+            is_captain = tank.get('is_captain', False)
 
-            if has_fan_shot:
-                # Fire 3 bullets in fan pattern
+            # Captain always fires 2-fan bullets (or use fan shot if they have it)
+            if has_fan_shot or is_captain:
+                # Fire bullets in fan pattern
+                num_bullets = FAN_SHOT_BULLETS if has_fan_shot else 2  # Captain fires 2 bullets
                 center_angle = tank['angle']
-                spread_start = center_angle - FAN_SHOT_SPREAD / 2
+                spread = FAN_SHOT_SPREAD if has_fan_shot else 0.2  # Smaller spread for captain
 
-                for i in range(FAN_SHOT_BULLETS):
-                    angle_offset = (FAN_SHOT_SPREAD / (FAN_SHOT_BULLETS - 1)) * i
-                    bullet_angle = spread_start + angle_offset
-                    bullet = create_bullet(tank, bullet_angle)
+                if num_bullets == 1:
+                    # Single bullet
+                    bullet = create_bullet(tank, center_angle)
                     bullets.append(bullet)
+                else:
+                    spread_start = center_angle - spread / 2
+                    for i in range(num_bullets):
+                        angle_offset = (spread / (num_bullets - 1)) * i
+                        bullet_angle = spread_start + angle_offset
+                        bullet = create_bullet(tank, bullet_angle)
+                        bullets.append(bullet)
             else:
                 # Fire single bullet
                 bullet = create_bullet(tank, tank['angle'])
                 bullets.append(bullet)
 
-            # Set cooldown based on fast_fire
+            # Set cooldown based on fast_fire or captain buff
             if has_fast_fire:
                 tank['shoot_cooldown'] = FAST_FIRE_COOLDOWN
+            elif is_captain:
+                # Captain has 50% faster fire rate (cooldown reduced to 67%)
+                tank['shoot_cooldown'] = int(SHOOT_COOLDOWN / CAPTAIN_FIRE_RATE_MULTIPLIER)
             else:
                 tank['shoot_cooldown'] = SHOOT_COOLDOWN
 
@@ -2929,6 +3077,14 @@ def detonate_atomic_bomb(player_id: str, tank: dict):
         kills_count += 1
         victims.append(target['name'])
 
+        # Check if target was captain and remove status
+        was_captain = target.get('is_captain', False)
+        if was_captain:
+            target['is_captain'] = False
+            global current_captain_id
+            current_captain_id = None
+            print(f'👑💣 Captain {target["name"]} killed by atomic bomb - status removed!')
+
         # Update team kills in Duel mode
         if current_game_mode == GAME_MODE_DUEL and tank.get('team') and target.get('team'):
             if tank['team'] == 'red':
@@ -2945,6 +3101,10 @@ def detonate_atomic_bomb(player_id: str, tank: dict):
             'killer_id': player_id,
             'killer_name': tank['name']
         })
+
+        # If captain was killed, select new one immediately
+        if was_captain:
+            select_captain()
 
     # Award points for kills
     tank['kills'] += kills_count

@@ -146,6 +146,11 @@ socket.on('supply_collected', (data) => {
     }
 });
 
+socket.on('captain_selected', (data) => {
+    console.log('Captain selected:', data.player_name);
+    showNotification(`👑 ${data.player_name} is now the CAPTAIN! (+50% speed, 2-fan bullets, +50% fire rate)`, '#FFD700');
+});
+
 socket.on('laser_warning', (data) => {
     const player = gameState.players.find(p => p.id === data.player_id);
     if (player) {
@@ -988,19 +993,40 @@ function draw() {
     }
 
     // Draw bullets
-    ctx.fillStyle = '#FFFF00';
     gameState.bullets.forEach(bullet => {
+        // Different visuals for ricochet bullets
+        const hasRicochet = bullet.ricochets_left > 0;
+
+        if (hasRicochet) {
+            // Ricochet bullets have a cyan/blue glow
+            const glowColor = bullet.ricochets_left >= 2 ? '#00FFFF' : '#00AAFF';
+            ctx.shadowColor = glowColor;
+            ctx.shadowBlur = 15;
+            ctx.fillStyle = glowColor;
+        } else {
+            // Regular bullets are yellow
+            ctx.fillStyle = '#FFFF00';
+            ctx.shadowBlur = 0;
+        }
+
         ctx.beginPath();
         ctx.arc(bullet.x, bullet.y, 6, 0, Math.PI * 2);
         ctx.fill();
 
         // Draw bullet trail
-        ctx.strokeStyle = 'rgba(255, 255, 0, 0.3)';
+        if (hasRicochet) {
+            ctx.strokeStyle = `rgba(0, ${bullet.ricochets_left >= 2 ? 255 : 170}, 255, 0.4)`;
+        } else {
+            ctx.strokeStyle = 'rgba(255, 255, 0, 0.3)';
+        }
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(bullet.x, bullet.y);
         ctx.lineTo(bullet.x - bullet.vx * 2, bullet.y - bullet.vy * 2);
         ctx.stroke();
+
+        // Reset shadow
+        ctx.shadowBlur = 0;
     });
 
     // Draw tanks
@@ -1299,15 +1325,27 @@ function draw() {
             nameDisplay = `💣 ${nameDisplay} 💣`;
         }
 
+        // Add Captain indicator
+        let captainOffset = 0;
+        if (player.is_captain) {
+            ctx.fillStyle = '#FFD700';
+            ctx.font = 'bold 14px Arial';
+            ctx.fillText('👑 CAPTAIN 👑', player.x, barY - 18);
+            captainOffset = 13;  // Add offset for name to appear below captain text
+        }
+
         // Add team indicator in Duel mode
         if (gameState.game_mode === 'duel' && player.team) {
             const teamLabel = player.team === 'red' ? '[RED]' : '[BLUE]';
             const teamColor = player.team === 'red' ? '#FF0000' : '#0000FF';
             ctx.fillStyle = teamColor;
-            ctx.fillText(teamLabel, player.x, barY - 18);
+            ctx.fillText(teamLabel, player.x, barY - 18 - captainOffset);
             ctx.fillStyle = player.color;
+            ctx.font = 'bold 12px Arial';
             ctx.fillText(nameDisplay, player.x, barY - 5);
         } else {
+            ctx.fillStyle = player.color;
+            ctx.font = 'bold 12px Arial';
             ctx.fillText(nameDisplay, player.x, barY - 5);
         }
 
