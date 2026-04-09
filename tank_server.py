@@ -2259,15 +2259,39 @@ def update_bullets(current_time):
         if check_terrain_collision(bullet['x'] - BULLET_SIZE/2, bullet['y'] - BULLET_SIZE/2, BULLET_SIZE, BULLET_SIZE):
             # Check if bullet can ricochet
             if bullet.get('ricochets_left', 0) > 0:
-                # RICOCHET! Reflect bullet velocity
-                # Simple reflection: reverse both vx and vy (rough but effective)
-                bullet['vx'] = -bullet['vx']
-                bullet['vy'] = -bullet['vy']
+                # RICOCHET! Reflect bullet velocity based on which wall side was hit.
+                # Determine hit side by checking collision from the previous position
+                # along each axis independently:
+                #   - If reverting X alone clears the collision -> hit a vertical wall (flip vx)
+                #   - If reverting Y alone clears the collision -> hit a horizontal wall (flip vy)
+                #   - If neither alone clears it -> corner hit (flip both)
+                prev_x = bullet['x'] - bullet['vx']
+                prev_y = bullet['y'] - bullet['vy']
+
+                hit_vertical_wall = check_terrain_collision(
+                    prev_x - BULLET_SIZE/2, bullet['y'] - BULLET_SIZE/2, BULLET_SIZE, BULLET_SIZE
+                )
+                hit_horizontal_wall = check_terrain_collision(
+                    bullet['x'] - BULLET_SIZE/2, prev_y - BULLET_SIZE/2, BULLET_SIZE, BULLET_SIZE
+                )
+
+                if hit_vertical_wall and not hit_horizontal_wall:
+                    # Hit a horizontal surface (top/bottom of rampart) -> flip vy
+                    bullet['vy'] = -bullet['vy']
+                elif hit_horizontal_wall and not hit_vertical_wall:
+                    # Hit a vertical surface (left/right of rampart) -> flip vx
+                    bullet['vx'] = -bullet['vx']
+                else:
+                    # Corner hit or ambiguous -> flip both
+                    bullet['vx'] = -bullet['vx']
+                    bullet['vy'] = -bullet['vy']
+
                 bullet['ricochets_left'] -= 1
 
-                # Move bullet away from wall to prevent getting stuck
-                bullet['x'] += bullet['vx'] * 2
-                bullet['y'] += bullet['vy'] * 2
+                # Move bullet back to previous (safe) position, then step forward
+                # with the new velocity to prevent getting stuck inside the wall
+                bullet['x'] = prev_x + bullet['vx']
+                bullet['y'] = prev_y + bullet['vy']
 
                 print(f'🔀 Bullet ricochet! {bullet["ricochets_left"]} bounces left')
             else:
