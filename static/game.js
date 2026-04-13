@@ -10,6 +10,23 @@ const ARENA_WIDTH = 1440;
 const ARENA_HEIGHT = 840;  // Reduced to fit with header/footer
 const TANK_SIZE = 30;
 
+// Pre-rendered static grid (never changes — drawn once, blit every frame)
+const gridCanvas = document.createElement('canvas');
+gridCanvas.width = ARENA_WIDTH;
+gridCanvas.height = ARENA_HEIGHT;
+(function () {
+    const gctx = gridCanvas.getContext('2d');
+    gctx.strokeStyle = '#3a3a3a';
+    gctx.lineWidth = 1;
+    const gridSize = 50;
+    for (let x = 0; x <= ARENA_WIDTH; x += gridSize) {
+        gctx.beginPath(); gctx.moveTo(x, 0); gctx.lineTo(x, ARENA_HEIGHT); gctx.stroke();
+    }
+    for (let y = 0; y <= ARENA_HEIGHT; y += gridSize) {
+        gctx.beginPath(); gctx.moveTo(0, y); gctx.lineTo(ARENA_WIDTH, y); gctx.stroke();
+    }
+}());
+
 // ----- Tank class rendering helpers -----
 // 3 tank classes: 'gun' (Laser Beam ult), 'light' (Speed Demon ult), 'armored' (Ghost Mode ult)
 // Each renderer draws a unique body/turret/barrel around (cx, cy) with the given rotation angle and base color.
@@ -292,8 +309,45 @@ let gameState = {
 
 let lastKilledBy = null;
 
-// Cache for bush foliage patterns (optimization - avoid regenerating random patterns every frame)
-let bushFoliageCache = new Map();
+// Pre-rendered terrain canvas (rebuilt once when terrain data arrives)
+let terrainCanvas = null;
+
+function prebuildTerrainCanvas(terrainData) {
+    terrainCanvas = document.createElement('canvas');
+    terrainCanvas.width = ARENA_WIDTH;
+    terrainCanvas.height = ARENA_HEIGHT;
+    const tctx = terrainCanvas.getContext('2d');
+    tctx.clearRect(0, 0, ARENA_WIDTH, ARENA_HEIGHT);
+    terrainData.forEach(obj => {
+        if (obj.type === 'rampart') {
+            tctx.fillStyle = '#666666';
+            tctx.fillRect(obj.x, obj.y, obj.width, obj.height);
+            tctx.strokeStyle = '#444444';
+            tctx.lineWidth = 2;
+            tctx.strokeRect(obj.x, obj.y, obj.width, obj.height);
+            tctx.strokeStyle = '#555555';
+            tctx.lineWidth = 1;
+            for (let bx = obj.x; bx < obj.x + obj.width; bx += 20) {
+                tctx.beginPath(); tctx.moveTo(bx, obj.y); tctx.lineTo(bx, obj.y + obj.height); tctx.stroke();
+            }
+            for (let by = obj.y; by < obj.y + obj.height; by += 15) {
+                tctx.beginPath(); tctx.moveTo(obj.x, by); tctx.lineTo(obj.x + obj.width, by); tctx.stroke();
+            }
+        } else if (obj.type === 'bush') {
+            tctx.fillStyle = 'rgba(34, 139, 34, 0.6)';
+            tctx.fillRect(obj.x, obj.y, obj.width, obj.height);
+            tctx.strokeStyle = 'rgba(0, 100, 0, 0.8)';
+            tctx.lineWidth = 2;
+            tctx.strokeRect(obj.x, obj.y, obj.width, obj.height);
+            tctx.fillStyle = 'rgba(50, 205, 50, 0.4)';
+            for (let i = 0; i < 5; i++) {
+                tctx.beginPath();
+                tctx.arc(obj.x + Math.random() * obj.width, obj.y + Math.random() * obj.height, 8, 0, Math.PI * 2);
+                tctx.fill();
+            }
+        }
+    });
+}
 
 // Atomic bomb explosion animation
 let explosionAnimation = null; // {startTime, duration}
@@ -463,8 +517,7 @@ function drawParticles() {
     });
 }
 
-function drawMuzzleFlashes() {
-    const now = Date.now();
+function drawMuzzleFlashes(now) {
     for (let i = muzzleFlashes.length - 1; i >= 0; i--) {
         const f = muzzleFlashes[i];
         const elapsed = now - f.startTime;
@@ -583,9 +636,9 @@ socket.on('connected', (data) => {
 socket.on('game_joined', (data) => {
     console.log('Joined game:', data);
     myPlayerName = data.name;
-    // Store terrain once (optimization - terrain doesn't change during game)
     if (data.terrain) {
         gameState.terrain = data.terrain;
+        prebuildTerrainCanvas(data.terrain);
     }
     welcomeScreen.style.display = 'none';
 });
@@ -601,16 +654,14 @@ socket.on('player_left', (data) => {
 });
 
 socket.on('game_state', (data) => {
-    // Preserve terrain if not in update (optimization - terrain sent once)
     const preservedTerrain = gameState.terrain;
-    // Detect movement/death events BEFORE overwriting gameState
     detectPlayerEventsAndUpdatePrev(data.players || []);
     gameState = data;
     if (!gameState.terrain && preservedTerrain) {
         gameState.terrain = preservedTerrain;
     }
     updateUI();
-    draw();
+    // draw() is handled by the RAF loop — no direct call needed here
 });
 
 socket.on('respawned', (data) => {
@@ -874,6 +925,10 @@ function sendSelectedEmoji() {
 document.addEventListener('keydown', (e) => {
     const key = e.key.toLowerCase();
 
+    // Skip game key handling when typing in an input field
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
     // Emoji picker takes keyboard priority while open
     if (emojiPickerOpen) {
         if (e.key === 'ArrowLeft') {
@@ -991,15 +1046,58 @@ canvas.addEventListener('mouseleave', () => {
     canvas.style.cursor = 'default';
 });
 
+// Helper: draw one team base (avoids duplicating ~80 lines for red/blue)
+function drawBase(base, borderColor, label) {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.fillRect(base.x + 3, base.y + 3, base.width, base.height);
+
+    const rgb = borderColor === '#FF0000' ? '255, 0, 0' : '0, 0, 255';
+    ctx.fillStyle = `rgba(${rgb}, 0.6)`;
+    ctx.fillRect(base.x, base.y, base.width, base.height);
+
+    ctx.strokeStyle = borderColor;
+    ctx.lineWidth = 4;
+    ctx.strokeRect(base.x, base.y, base.width, base.height);
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = 'bold 32px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🏰', base.x + base.width / 2, base.y + base.height / 2);
+
+    const barX = base.x;
+    const barY = base.y - 20;
+    const barW = base.width;
+    const barH = 10;
+    const hp = base.health / base.max_health;
+    const hpColor = hp < 0.3 ? '#FF0000' : hp < 0.6 ? '#FFAA00' : '#00FF00';
+
+    ctx.fillStyle = '#333333';
+    ctx.fillRect(barX, barY, barW, barH);
+    ctx.fillStyle = hpColor;
+    ctx.fillRect(barX, barY, barW * hp, barH);
+    ctx.strokeStyle = borderColor;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(barX, barY, barW, barH);
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = 'bold 14px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(`${label}: ${base.health}/${base.max_health}`, base.x + base.width / 2, barY - 10);
+}
+
 // Drawing functions
 function draw() {
+    const now = Date.now();
+
     // Clear canvas
     ctx.fillStyle = '#2a2a2a';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // Draw atomic bomb explosion animation
     if (explosionAnimation) {
-        const elapsed = Date.now() - explosionAnimation.startTime;
+        const elapsed = now - explosionAnimation.startTime;
         const progress = elapsed / explosionAnimation.duration;
 
         if (progress < 1) {
@@ -1040,192 +1138,18 @@ function draw() {
         }
     }
 
-    // Draw grid
-    ctx.strokeStyle = '#3a3a3a';
-    ctx.lineWidth = 1;
-    const gridSize = 50;
-    for (let x = 0; x <= ARENA_WIDTH; x += gridSize) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, ARENA_HEIGHT);
-        ctx.stroke();
-    }
-    for (let y = 0; y <= ARENA_HEIGHT; y += gridSize) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(ARENA_WIDTH, y);
-        ctx.stroke();
-    }
+    // Draw grid (pre-rendered offscreen canvas — blit in one call)
+    ctx.drawImage(gridCanvas, 0, 0);
 
     // Draw team bases in Duel mode
     if (gameState.game_mode === 'duel') {
-        // Draw Red Base
-        if (gameState.red_base) {
-            const base = gameState.red_base;
-            // Base shadow
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
-            ctx.fillRect(base.x + 3, base.y + 3, base.width, base.height);
-
-            // Base body
-            ctx.fillStyle = 'rgba(255, 0, 0, 0.6)';
-            ctx.fillRect(base.x, base.y, base.width, base.height);
-
-            // Base border
-            ctx.strokeStyle = '#FF0000';
-            ctx.lineWidth = 4;
-            ctx.strokeRect(base.x, base.y, base.width, base.height);
-
-            // Base core symbol
-            ctx.fillStyle = '#FFFFFF';
-            ctx.font = 'bold 32px Arial';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText('🏰', base.x + base.width / 2, base.y + base.height / 2);
-
-            // Health bar above base
-            const barWidth = base.width;
-            const barHeight = 10;
-            const barX = base.x;
-            const barY = base.y - 20;
-
-            // Background
-            ctx.fillStyle = '#333333';
-            ctx.fillRect(barX, barY, barWidth, barHeight);
-
-            // Health
-            const healthPercent = base.health / base.max_health;
-            let healthColor = '#00FF00';
-            if (healthPercent < 0.3) healthColor = '#FF0000';
-            else if (healthPercent < 0.6) healthColor = '#FFAA00';
-
-            ctx.fillStyle = healthColor;
-            ctx.fillRect(barX, barY, barWidth * healthPercent, barHeight);
-
-            // Border
-            ctx.strokeStyle = '#FF0000';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(barX, barY, barWidth, barHeight);
-
-            // HP Text
-            ctx.fillStyle = '#FFFFFF';
-            ctx.font = 'bold 14px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText(`RED BASE: ${base.health}/${base.max_health}`, base.x + base.width / 2, barY - 10);
-        }
-
-        // Draw Blue Base
-        if (gameState.blue_base) {
-            const base = gameState.blue_base;
-            // Base shadow
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
-            ctx.fillRect(base.x + 3, base.y + 3, base.width, base.height);
-
-            // Base body
-            ctx.fillStyle = 'rgba(0, 0, 255, 0.6)';
-            ctx.fillRect(base.x, base.y, base.width, base.height);
-
-            // Base border
-            ctx.strokeStyle = '#0000FF';
-            ctx.lineWidth = 4;
-            ctx.strokeRect(base.x, base.y, base.width, base.height);
-
-            // Base core symbol
-            ctx.fillStyle = '#FFFFFF';
-            ctx.font = 'bold 32px Arial';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText('🏰', base.x + base.width / 2, base.y + base.height / 2);
-
-            // Health bar above base
-            const barWidth = base.width;
-            const barHeight = 10;
-            const barX = base.x;
-            const barY = base.y - 20;
-
-            // Background
-            ctx.fillStyle = '#333333';
-            ctx.fillRect(barX, barY, barWidth, barHeight);
-
-            // Health
-            const healthPercent = base.health / base.max_health;
-            let healthColor = '#00FF00';
-            if (healthPercent < 0.3) healthColor = '#FF0000';
-            else if (healthPercent < 0.6) healthColor = '#FFAA00';
-
-            ctx.fillStyle = healthColor;
-            ctx.fillRect(barX, barY, barWidth * healthPercent, barHeight);
-
-            // Border
-            ctx.strokeStyle = '#0000FF';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(barX, barY, barWidth, barHeight);
-
-            // HP Text
-            ctx.fillStyle = '#FFFFFF';
-            ctx.font = 'bold 14px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText(`BLUE BASE: ${base.health}/${base.max_health}`, base.x + base.width / 2, barY - 10);
-        }
+        if (gameState.red_base)  drawBase(gameState.red_base,  '#FF0000', 'RED BASE');
+        if (gameState.blue_base) drawBase(gameState.blue_base, '#0000FF', 'BLUE BASE');
     }
 
-    // Draw terrain
-    if (gameState.terrain) {
-        gameState.terrain.forEach(obj => {
-            if (obj.type === 'rampart') {
-                // Draw ramparts (solid stone walls)
-                ctx.fillStyle = '#666666';
-                ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
-                ctx.strokeStyle = '#444444';
-                ctx.lineWidth = 2;
-                ctx.strokeRect(obj.x, obj.y, obj.width, obj.height);
-
-                // Add brick pattern
-                ctx.strokeStyle = '#555555';
-                ctx.lineWidth = 1;
-                for (let bx = obj.x; bx < obj.x + obj.width; bx += 20) {
-                    ctx.beginPath();
-                    ctx.moveTo(bx, obj.y);
-                    ctx.lineTo(bx, obj.y + obj.height);
-                    ctx.stroke();
-                }
-                for (let by = obj.y; by < obj.y + obj.height; by += 15) {
-                    ctx.beginPath();
-                    ctx.moveTo(obj.x, by);
-                    ctx.lineTo(obj.x + obj.width, by);
-                    ctx.stroke();
-                }
-            } else if (obj.type === 'bush') {
-                // Draw bushes (green cover)
-                ctx.fillStyle = 'rgba(34, 139, 34, 0.6)';
-                ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
-                ctx.strokeStyle = 'rgba(0, 100, 0, 0.8)';
-                ctx.lineWidth = 2;
-                ctx.strokeRect(obj.x, obj.y, obj.width, obj.height);
-
-                // Add foliage pattern (cached to avoid random generation every frame - optimization)
-                const bushKey = `${obj.x},${obj.y}`;
-                if (!bushFoliageCache.has(bushKey)) {
-                    // Generate foliage positions once and cache them
-                    const foliage = [];
-                    for (let i = 0; i < 5; i++) {
-                        foliage.push({
-                            cx: obj.x + Math.random() * obj.width,
-                            cy: obj.y + Math.random() * obj.height
-                        });
-                    }
-                    bushFoliageCache.set(bushKey, foliage);
-                }
-
-                // Draw cached foliage
-                ctx.fillStyle = 'rgba(50, 205, 50, 0.4)';
-                const foliage = bushFoliageCache.get(bushKey);
-                for (const circle of foliage) {
-                    ctx.beginPath();
-                    ctx.arc(circle.cx, circle.cy, 8, 0, Math.PI * 2);
-                    ctx.fill();
-                }
-            }
-        });
+    // Draw terrain (pre-rendered offscreen canvas — blit in one call)
+    if (terrainCanvas) {
+        ctx.drawImage(terrainCanvas, 0, 0);
     }
 
     // Draw huge segmented snake if active (3 cells wide × 13 cells long)
@@ -1415,7 +1339,7 @@ function draw() {
     if (gameState.supply_drops && gameState.supply_drops.length > 0) {
         gameState.supply_drops.forEach(drop => {
             // Pulsing animation
-            const pulse = Math.sin(Date.now() / 200) * 0.2 + 1;
+            const pulse = Math.sin(now / 200) * 0.2 + 1;
             const size = drop.size * pulse;
 
             // Draw outer glow
@@ -1456,7 +1380,7 @@ function draw() {
             ctx.fillRect(drop.x - size/2, drop.y - size/2, size, size);
 
             // Draw border (thicker for super)
-            ctx.strokeStyle = drop.type === 'super_powerup' ? '#FFFFFF' : '#FFFFFF';
+            ctx.strokeStyle = '#FFFFFF';
             ctx.lineWidth = drop.type === 'super_powerup' ? 4 : 3;
             ctx.strokeRect(drop.x - size/2, drop.y - size/2, size, size);
 
@@ -1471,7 +1395,7 @@ function draw() {
             if (drop.type === 'super_powerup') {
                 ctx.save();
                 ctx.translate(drop.x, drop.y);
-                ctx.rotate(Date.now() / 500);
+                ctx.rotate(now / 500);
                 ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
                 ctx.lineWidth = 2;
                 ctx.strokeRect(-size/2 - 5, -size/2 - 5, size + 10, size + 10);
@@ -1485,7 +1409,7 @@ function draw() {
         const drop = gameState.shield_drop;
 
         // Pulsing animation
-        const pulse = Math.sin(Date.now() / 200) * 0.2 + 1;
+        const pulse = Math.sin(now / 200) * 0.2 + 1;
         const size = drop.size * pulse;
 
         // Draw outer glow (cyan/blue)
@@ -1520,7 +1444,7 @@ function draw() {
         // Add rotating hexagon effect
         ctx.save();
         ctx.translate(drop.x, drop.y);
-        ctx.rotate(Date.now() / 500);
+        ctx.rotate(now / 500);
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
         ctx.lineWidth = 2;
 
@@ -1546,7 +1470,7 @@ function draw() {
         const bomb = gameState.atomic_bomb;
 
         // Intense pulsing animation
-        const pulse = Math.sin(Date.now() / 150) * 0.3 + 1;
+        const pulse = Math.sin(now / 150) * 0.3 + 1;
         const size = bomb.size * pulse;
 
         // Draw danger glow (orange/red)
@@ -1566,7 +1490,7 @@ function draw() {
         ctx.fill();
 
         // Draw bomb border (flashing)
-        const flashAlpha = Math.sin(Date.now() / 100) * 0.5 + 0.5;
+        const flashAlpha = Math.sin(now / 100) * 0.5 + 0.5;
         ctx.strokeStyle = `rgba(255, 0, 0, ${flashAlpha})`;
         ctx.lineWidth = 4;
         ctx.beginPath();
@@ -1588,7 +1512,7 @@ function draw() {
         // Add rotating warning triangles
         ctx.save();
         ctx.translate(bomb.x, bomb.y);
-        ctx.rotate(Date.now() / 400);
+        ctx.rotate(now / 400);
 
         for (let i = 0; i < 3; i++) {
             const angle = (i / 3) * Math.PI * 2;
@@ -1665,7 +1589,7 @@ function draw() {
 
         // Add pulsing glow effect for invincible tanks
         if (player.invincible && player.alive) {
-            const pulseAlpha = Math.sin(Date.now() / 200) * 0.3 + 0.5;
+            const pulseAlpha = Math.sin(now / 200) * 0.3 + 0.5;
             ctx.shadowColor = '#FFD700';
             ctx.shadowBlur = 25 * pulseAlpha;
         }
@@ -1673,7 +1597,7 @@ function draw() {
         // Show laser beam preparation warning
         if (player.laser_preparing && player.alive) {
             // Red pulsing warning effect
-            const pulseAlpha = Math.sin(Date.now() / 150) * 0.4 + 0.6;
+            const pulseAlpha = Math.sin(now / 150) * 0.4 + 0.6;
             ctx.shadowColor = '#FF0000';
             ctx.shadowBlur = 50 * pulseAlpha;
 
@@ -1702,7 +1626,7 @@ function draw() {
         // Show post-firing cooldown indicator
         if (player.laser_cooling_down && player.alive) {
             // Blue frozen effect
-            const pulseAlpha = Math.sin(Date.now() / 100) * 0.3 + 0.5;
+            const pulseAlpha = Math.sin(now / 100) * 0.3 + 0.5;
             ctx.shadowColor = '#00BFFF';
             ctx.shadowBlur = 30 * pulseAlpha;
 
@@ -1710,7 +1634,7 @@ function draw() {
             ctx.strokeStyle = 'rgba(0, 191, 255, ' + pulseAlpha + ')';
             ctx.lineWidth = 3;
             for (let i = 0; i < 8; i++) {
-                const angle = (i / 8) * Math.PI * 2 + Date.now() / 300;
+                const angle = (i / 8) * Math.PI * 2 + now / 300;
                 const x1 = player.x + Math.cos(angle) * (TANK_SIZE / 2 + 5);
                 const y1 = player.y + Math.sin(angle) * (TANK_SIZE / 2 + 5);
                 const x2 = player.x + Math.cos(angle) * (TANK_SIZE / 2 + 12);
@@ -1731,7 +1655,7 @@ function draw() {
         // Show atomic bomb preparation warning
         if (player.bomb_preparing && player.alive) {
             // MASSIVE orange/red pulsing warning effect
-            const pulseAlpha = Math.sin(Date.now() / 100) * 0.5 + 0.5;
+            const pulseAlpha = Math.sin(now / 100) * 0.5 + 0.5;
             ctx.shadowColor = '#FF4500';
             ctx.shadowBlur = 80 * pulseAlpha;
 
@@ -1765,7 +1689,7 @@ function draw() {
         // Show post-detonation freeze indicator
         if (player.bomb_freezing && player.alive) {
             // Heavy frozen effect after explosion
-            const pulseAlpha = Math.sin(Date.now() / 80) * 0.4 + 0.6;
+            const pulseAlpha = Math.sin(now / 80) * 0.4 + 0.6;
             ctx.shadowColor = '#4169E1';
             ctx.shadowBlur = 40 * pulseAlpha;
 
@@ -1773,7 +1697,7 @@ function draw() {
             ctx.strokeStyle = 'rgba(65, 105, 225, ' + pulseAlpha + ')';
             ctx.lineWidth = 4;
             for (let i = 0; i < 12; i++) {
-                const angle = (i / 12) * Math.PI * 2 + Date.now() / 200;
+                const angle = (i / 12) * Math.PI * 2 + now / 200;
                 const x1 = player.x + Math.cos(angle) * (TANK_SIZE / 2 + 8);
                 const y1 = player.y + Math.sin(angle) * (TANK_SIZE / 2 + 8);
                 const x2 = player.x + Math.cos(angle) * (TANK_SIZE / 2 + 18);
@@ -1794,7 +1718,7 @@ function draw() {
         // "Hunt the Captain" targeting effect (triggered every 30s server-side)
         if (player.captain_targeted && player.alive) {
             ctx.save();
-            const t = Date.now() / 200;
+            const t = now / 200;
             const pulse = Math.sin(t) * 0.35 + 0.65;
 
             // Outer pulsing glow
@@ -1851,7 +1775,7 @@ function draw() {
         if (player.skill_active && player.alive) {
             if (player.skill === 'speed_demon') {
                 // Speed Demon: Lightning aura
-                const pulseAlpha = Math.sin(Date.now() / 100) * 0.4 + 0.6;
+                const pulseAlpha = Math.sin(now / 100) * 0.4 + 0.6;
                 ctx.shadowColor = '#FFFF00';
                 ctx.shadowBlur = 35 * pulseAlpha;
 
@@ -1859,7 +1783,7 @@ function draw() {
                 ctx.strokeStyle = 'rgba(255, 255, 0, ' + pulseAlpha + ')';
                 ctx.lineWidth = 2;
                 for (let i = 0; i < 8; i++) {
-                    const angle = (i / 8) * Math.PI * 2 + Date.now() / 500;
+                    const angle = (i / 8) * Math.PI * 2 + now / 500;
                     const x1 = player.x + Math.cos(angle) * (TANK_SIZE / 2 + 5);
                     const y1 = player.y + Math.sin(angle) * (TANK_SIZE / 2 + 5);
                     const x2 = player.x + Math.cos(angle) * (TANK_SIZE / 2 + 15);
@@ -1905,7 +1829,7 @@ function draw() {
                 ctx.stroke();
             } else if (player.skill === 'ghost_mode') {
                 // Ghost Mode: Ghostly transparent effect
-                const pulseAlpha = Math.sin(Date.now() / 150) * 0.3 + 0.5;
+                const pulseAlpha = Math.sin(now / 150) * 0.3 + 0.5;
                 ctx.shadowColor = '#9370DB';
                 ctx.shadowBlur = 30 * pulseAlpha;
                 ctx.globalAlpha = 0.6;
@@ -2070,12 +1994,9 @@ function draw() {
         ctx.globalAlpha = 1.0;
     });
 
-    // Update + draw particles (exhaust, debris, smoke, rings, sparks)
-    // Use a fixed dt based on server tick so movement feels consistent
-    updateParticles(1000 / 30);
     drawParticles();
     // Muzzle flashes on top of everything
-    drawMuzzleFlashes();
+    drawMuzzleFlashes(now);
 }
 
 // Update UI elements
@@ -2291,6 +2212,21 @@ const gameOverOkButton = document.getElementById('game-over-ok');
 gameOverOkButton.addEventListener('click', () => {
     document.getElementById('game-over-screen').style.display = 'none';
 });
+
+// RAF-based animation loop — decouples rendering from the server tick rate (30/s).
+// Runs at the browser's refresh rate (~60fps), giving smooth particles, muzzle
+// flashes, and pulsing effects even between server packets.
+let _rafLastTs = 0;
+function rafLoop(ts) {
+    const dt = _rafLastTs ? ts - _rafLastTs : 1000 / 30;
+    _rafLastTs = ts;
+    updateParticles(dt);
+    if (myPlayerId !== null) {
+        draw();
+    }
+    requestAnimationFrame(rafLoop);
+}
+requestAnimationFrame(rafLoop);
 
 // Focus name input on load
 window.addEventListener('load', () => {

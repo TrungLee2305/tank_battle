@@ -9,12 +9,16 @@ from gevent import monkey
 monkey.patch_all()
 
 # Now import everything else
+import os
 import random
 import time
 import math
 import logging
+import traceback
+from collections import Counter
 from typing import Dict, List, Tuple
 from flask import Flask, render_template, send_from_directory, request
+from werkzeug.exceptions import HTTPException
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 
@@ -24,7 +28,7 @@ logging.getLogger('werkzeug').setLevel(logging.ERROR)
 logging.getLogger('gevent').setLevel(logging.ERROR)
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
-app.config['SECRET_KEY'] = 'tank_battle_secret_key_2024'
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'tank_battle_secret_key_2024')
 
 # Enable CORS for all routes and origins
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -50,7 +54,9 @@ def bad_request(error):
 @app.errorhandler(Exception)
 def handle_exception(e):
     """Handle general exceptions to prevent crashes"""
-    import traceback
+    # Pass standard HTTP errors (404, 405, …) back to Flask unchanged
+    if isinstance(e, HTTPException):
+        return e
     error_msg = str(e)
     if 'Invalid HTTP method' not in error_msg:
         print(f'✗ Server error: {error_msg}')
@@ -152,7 +158,6 @@ ATOMIC_BOMB_PREPARATION = 3.0  # seconds preparation phase (warning, frozen in p
 ATOMIC_BOMB_FREEZE = 2.0  # seconds post-detonation frozen phase
 
 # Captain System constants
-CAPTAIN_INTERVAL = 60  # seconds between captain selections (NOT USED - captain selected immediately on death)
 CAPTAIN_SPEED_MULTIPLIER = 1.5  # 50% speed increase
 CAPTAIN_FIRE_RATE_MULTIPLIER = 1.5  # 50% faster firing (cooldown reduced by 33%)
 CAPTAIN_KILL_REWARD = 1000  # Points for killing the captain
@@ -895,34 +900,11 @@ def generate_terrain_duel_jungle():
     print(f'   Map features: Closed boundaries, 3-lane structure, 18 bushes, jungle camps, 6-cell center barrier')
 
 
-def get_winning_map_vote() -> str:
-    """Determine the winning map type based on player votes"""
-    if not map_votes:
-        return MAP_TYPE  # Default if no votes
-
-    # Count votes
-    vote_counts = {}
-    for vote in map_votes.values():
-        vote_counts[vote] = vote_counts.get(vote, 0) + 1
-
-    # Return map with most votes
-    winning_map = max(vote_counts.items(), key=lambda x: x[1])[0]
-    return winning_map
-
-
-def get_winning_game_mode_vote() -> str:
-    """Determine the winning game mode based on player votes"""
-    if not game_mode_votes:
-        return GAME_MODE_FFA  # Default if no votes
-
-    # Count votes
-    vote_counts = {}
-    for vote in game_mode_votes.values():
-        vote_counts[vote] = vote_counts.get(vote, 0) + 1
-
-    # Return mode with most votes
-    winning_mode = max(vote_counts.items(), key=lambda x: x[1])[0]
-    return winning_mode
+def get_winning_vote(votes: dict, default: str) -> str:
+    """Return the most-voted value, or *default* when no votes exist."""
+    if not votes:
+        return default
+    return Counter(votes.values()).most_common(1)[0][0]
 
 
 def generate_terrain(map_type: str = None, game_mode: str = None):
@@ -930,13 +912,13 @@ def generate_terrain(map_type: str = None, game_mode: str = None):
     global current_map_type, current_game_mode, terrain_generated
 
     if game_mode is None:
-        game_mode = get_winning_game_mode_vote()
+        game_mode = get_winning_vote(game_mode_votes, GAME_MODE_FFA)
 
     current_game_mode = game_mode
 
     # Get map type for both modes
     if map_type is None:
-        map_type = get_winning_map_vote()
+        map_type = get_winning_vote(map_votes, MAP_TYPE)
 
     current_map_type = map_type
 
@@ -1044,47 +1026,31 @@ def get_random_position() -> Tuple[float, float]:
     )
 
 
+def find_safe_spawn_pos(item_size: float, max_attempts: int = 50) -> Tuple[float, float]:
+    """Return a position not inside any rampart, or a random fallback if none found."""
+    half = item_size / 2
+    lo_x, hi_x = item_size * 2, ARENA_WIDTH - item_size * 2
+    lo_y, hi_y = item_size * 2, ARENA_HEIGHT - item_size * 2
+    for _ in range(max_attempts):
+        x = random.uniform(lo_x, hi_x)
+        y = random.uniform(lo_y, hi_y)
+        if not check_terrain_collision(x - half, y - half, item_size, item_size):
+            return x, y
+    return random.uniform(lo_x, hi_x), random.uniform(lo_y, hi_y)
+
+
 def spawn_supply_drops():
     """Spawn 2 new supply drops at random locations (different types)"""
     global supply_drops, last_supply_drop_time
 
-    # Clear only regular drops, keep super power-ups
     supply_drops = [drop for drop in supply_drops if drop['is_super']]
 
-    # Pick 2 different power-up types
     available_types = ['fast_fire', 'fan_shot', 'speed_boost']
     random.shuffle(available_types)
-    selected_types = available_types[:2]  # Pick first 2
-
-    for powerup_type in selected_types:
-        # Find safe position (not in walls)
-        attempts = 0
-        while attempts < 50:
-            x = random.uniform(SUPPLY_DROP_SIZE * 2, ARENA_WIDTH - SUPPLY_DROP_SIZE * 2)
-            y = random.uniform(SUPPLY_DROP_SIZE * 2, ARENA_HEIGHT - SUPPLY_DROP_SIZE * 2)
-
-            # Check not in rampart
-            if not check_terrain_collision(x - SUPPLY_DROP_SIZE/2, y - SUPPLY_DROP_SIZE/2,
-                                           SUPPLY_DROP_SIZE, SUPPLY_DROP_SIZE):
-                supply_drops.append({
-                    'x': x,
-                    'y': y,
-                    'size': SUPPLY_DROP_SIZE,
-                    'type': powerup_type,
-                    'is_super': False
-                })
-                print(f'📦 Supply drop spawned: {powerup_type.upper()} at ({int(x)}, {int(y)})')
-                break
-            attempts += 1
-        else:
-            # If can't find safe spot, spawn anyway
-            supply_drops.append({
-                'x': random.uniform(SUPPLY_DROP_SIZE * 2, ARENA_WIDTH - SUPPLY_DROP_SIZE * 2),
-                'y': random.uniform(SUPPLY_DROP_SIZE * 2, ARENA_HEIGHT - SUPPLY_DROP_SIZE * 2),
-                'size': SUPPLY_DROP_SIZE,
-                'type': powerup_type,
-                'is_super': False
-            })
+    for powerup_type in available_types[:2]:
+        x, y = find_safe_spawn_pos(SUPPLY_DROP_SIZE)
+        supply_drops.append({'x': x, 'y': y, 'size': SUPPLY_DROP_SIZE, 'type': powerup_type, 'is_super': False})
+        print(f'📦 Supply drop spawned: {powerup_type.upper()} at ({int(x)}, {int(y)})')
 
     last_supply_drop_time = time.time()
 
@@ -1093,36 +1059,10 @@ def spawn_super_drop():
     """Spawn a super power-up (combines all abilities)"""
     global supply_drops, last_super_drop_time
 
-    # Find safe position (not in walls)
-    attempts = 0
-    while attempts < 50:
-        x = random.uniform(SUPPLY_DROP_SIZE * 2, ARENA_WIDTH - SUPPLY_DROP_SIZE * 2)
-        y = random.uniform(SUPPLY_DROP_SIZE * 2, ARENA_HEIGHT - SUPPLY_DROP_SIZE * 2)
-
-        # Check not in rampart
-        if not check_terrain_collision(x - SUPPLY_DROP_SIZE/2, y - SUPPLY_DROP_SIZE/2,
-                                       SUPPLY_DROP_SIZE, SUPPLY_DROP_SIZE):
-            supply_drops.append({
-                'x': x,
-                'y': y,
-                'size': SUPPLY_DROP_SIZE * 1.3,  # Slightly larger
-                'type': 'super_powerup',
-                'is_super': True
-            })
-            last_super_drop_time = time.time()
-            print(f'🌟 SUPER POWER-UP spawned at ({int(x)}, {int(y)})!')
-            return
-        attempts += 1
-
-    # If can't find safe spot, spawn anyway
-    supply_drops.append({
-        'x': random.uniform(SUPPLY_DROP_SIZE * 2, ARENA_WIDTH - SUPPLY_DROP_SIZE * 2),
-        'y': random.uniform(SUPPLY_DROP_SIZE * 2, ARENA_HEIGHT - SUPPLY_DROP_SIZE * 2),
-        'size': SUPPLY_DROP_SIZE * 1.3,
-        'type': 'super_powerup',
-        'is_super': True
-    })
+    x, y = find_safe_spawn_pos(SUPPLY_DROP_SIZE)
+    supply_drops.append({'x': x, 'y': y, 'size': SUPPLY_DROP_SIZE * 1.3, 'type': 'super_powerup', 'is_super': True})
     last_super_drop_time = time.time()
+    print(f'🌟 SUPER POWER-UP spawned at ({int(x)}, {int(y)})!')
 
 
 def spawn_snake():
@@ -1260,71 +1200,21 @@ def spawn_shield_drop():
     """Spawn an invincibility shield drop"""
     global shield_drop, last_shield_drop_time
 
-    # Find safe position (not in walls)
-    attempts = 0
-    while attempts < 50:
-        x = random.uniform(SUPPLY_DROP_SIZE * 2, ARENA_WIDTH - SUPPLY_DROP_SIZE * 2)
-        y = random.uniform(SUPPLY_DROP_SIZE * 2, ARENA_HEIGHT - SUPPLY_DROP_SIZE * 2)
-
-        # Check not in rampart
-        if not check_terrain_collision(x - SUPPLY_DROP_SIZE/2, y - SUPPLY_DROP_SIZE/2,
-                                       SUPPLY_DROP_SIZE, SUPPLY_DROP_SIZE):
-            shield_drop = {
-                'x': x,
-                'y': y,
-                'size': SUPPLY_DROP_SIZE
-            }
-            last_shield_drop_time = time.time()
-            print(f'🛡️  SHIELD DROP spawned at ({int(x)}, {int(y)})!')
-            return
-        attempts += 1
-
-    # If can't find safe spot, spawn anyway
-    shield_drop = {
-        'x': random.uniform(SUPPLY_DROP_SIZE * 2, ARENA_WIDTH - SUPPLY_DROP_SIZE * 2),
-        'y': random.uniform(SUPPLY_DROP_SIZE * 2, ARENA_HEIGHT - SUPPLY_DROP_SIZE * 2),
-        'size': SUPPLY_DROP_SIZE
-    }
+    x, y = find_safe_spawn_pos(SUPPLY_DROP_SIZE)
+    shield_drop = {'x': x, 'y': y, 'size': SUPPLY_DROP_SIZE}
     last_shield_drop_time = time.time()
+    print(f'🛡️  SHIELD DROP spawned at ({int(x)}, {int(y)})!')
 
 
 def spawn_atomic_bomb():
     """Spawn an atomic bomb that can be collected and used once"""
     global atomic_bomb, last_atomic_bomb_time
 
-    # Find safe position (not in walls)
-    attempts = 0
-    while attempts < 50:
-        x = random.uniform(ATOMIC_BOMB_SIZE * 2, ARENA_WIDTH - ATOMIC_BOMB_SIZE * 2)
-        y = random.uniform(ATOMIC_BOMB_SIZE * 2, ARENA_HEIGHT - ATOMIC_BOMB_SIZE * 2)
-
-        # Check not in rampart
-        if not check_terrain_collision(x - ATOMIC_BOMB_SIZE/2, y - ATOMIC_BOMB_SIZE/2,
-                                       ATOMIC_BOMB_SIZE, ATOMIC_BOMB_SIZE):
-            atomic_bomb = {
-                'x': x,
-                'y': y,
-                'size': ATOMIC_BOMB_SIZE
-            }
-            last_atomic_bomb_time = time.time()
-            print(f'💣 ATOMIC BOMB spawned at ({int(x)}, {int(y)})!')
-
-            # Broadcast spawn notification
-            socketio.emit('atomic_bomb_spawned', {
-                'x': x,
-                'y': y
-            })
-            return
-        attempts += 1
-
-    # If can't find safe spot, spawn anyway
-    atomic_bomb = {
-        'x': random.uniform(ATOMIC_BOMB_SIZE * 2, ARENA_WIDTH - ATOMIC_BOMB_SIZE * 2),
-        'y': random.uniform(ATOMIC_BOMB_SIZE * 2, ARENA_HEIGHT - ATOMIC_BOMB_SIZE * 2),
-        'size': ATOMIC_BOMB_SIZE
-    }
+    x, y = find_safe_spawn_pos(ATOMIC_BOMB_SIZE)
+    atomic_bomb = {'x': x, 'y': y, 'size': ATOMIC_BOMB_SIZE}
     last_atomic_bomb_time = time.time()
-    print(f'💣 ATOMIC BOMB spawned at ({int(atomic_bomb["x"])}, {int(atomic_bomb["y"])})!')
+    print(f'💣 ATOMIC BOMB spawned at ({int(x)}, {int(y)})!')
+    socketio.emit('atomic_bomb_spawned', {'x': x, 'y': y})
 
 
 def select_captain():

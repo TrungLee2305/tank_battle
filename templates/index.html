@@ -168,11 +168,11 @@
                     <div class="modal">
                         <h2 id="game-over-title">GAME OVER</h2>
                         <div id="game-over-content">
-                            <p id="winning-team" style="font-size: 32px; font-weight: bold; margin: 20px 0;"></p>
-                            <p id="win-reason" style="font-size: 18px; margin: 15px 0;"></p>
-                            <div id="final-team-scores" style="margin: 20px 0; font-size: 16px;">
-                                <div style="color: #FF0000; margin: 5px 0;">Red Team: <span id="final-red-kills">0</span> kills</div>
-                                <div style="color: #0000FF; margin: 5px 0;">Blue Team: <span id="final-blue-kills">0</span> kills</div>
+                            <p id="winning-team"></p>
+                            <p id="win-reason"></p>
+                            <div id="final-team-scores">
+                                <div class="team-score-red">Red Team: <span id="final-red-kills">0</span> kills</div>
+                                <div class="team-score-blue">Blue Team: <span id="final-blue-kills">0</span> kills</div>
                             </div>
                         </div>
                         <button id="game-over-ok" class="btn-primary">Continue Playing</button>
@@ -237,13 +237,13 @@
                     <h3>💣 Atomic Bomb</h3>
                     <div id="bomb-display">
                         <div id="bomb-status">
-                            <div id="bomb-ready-indicator" style="background: linear-gradient(135deg, #ff4500, #ff8c00); padding: 15px; border-radius: 8px; text-align: center; animation: pulse 1s infinite;">
-                                <div style="font-size: 40px; margin-bottom: 10px;">☢️</div>
-                                <div id="bomb-status-text" style="color: #fff; font-weight: bold; font-size: 16px; text-shadow: 0 0 10px rgba(255,69,0,0.8);">READY TO DETONATE</div>
-                                <div id="bomb-action-text" style="color: #ffff00; font-weight: bold; font-size: 14px; margin-top: 8px; animation: blink 0.5s infinite;">Press 'X' to activate!</div>
+                            <div id="bomb-ready-indicator">
+                                <div class="bomb-icon">☢️</div>
+                                <div id="bomb-status-text">READY TO DETONATE</div>
+                                <div id="bomb-action-text">Press 'X' to activate!</div>
                             </div>
                         </div>
-                        <p style="color: #ff4500; font-size: 12px; text-align: center; margin-top: 10px;">⚠️ Kills all non-invincible players!</p>
+                        <p class="bomb-warning-text">⚠️ Kills all non-invincible players!</p>
                     </div>
                 </div>
 
