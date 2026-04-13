@@ -1575,8 +1575,8 @@ function draw() {
 
     // Draw tanks
     gameState.players.forEach(player => {
-        // Skip drawing if tank is hidden in bush (except for own tank)
-        if (player.hidden && player.id !== myPlayerId) {
+        // Skip drawing if tank is hidden in bush (except own tank and the captain — always visible)
+        if (player.hidden && player.id !== myPlayerId && !player.is_captain) {
             return; // Don't draw hidden enemy tanks
         }
 
@@ -1585,6 +1585,9 @@ function draw() {
         } else if (player.hidden && player.id === myPlayerId) {
             // Show own tank semi-transparent when hidden
             ctx.globalAlpha = 0.7;
+        } else if (player.hidden && player.is_captain) {
+            // Captain is always visible but shown semi-transparent to indicate they're in a bush
+            ctx.globalAlpha = 0.6;
         }
 
         // Add pulsing glow effect for invincible tanks
