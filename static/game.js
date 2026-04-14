@@ -408,6 +408,17 @@ function spawnMuzzleFlash(x, y, angle, color) {
     }
 }
 
+function spawnDeathEmoji(x, y, emoji) {
+    particles.push({
+        x, y: y - TANK_SIZE,
+        vx: 0, vy: -1.2,
+        life: 2200, maxLife: 2200,
+        type: 'death_emoji',
+        emoji,
+        size: 34
+    });
+}
+
 function spawnDeathExplosion(x, y, color) {
     // Ring-type particle + many debris particles + a few smoke puffs
     particles.push({
@@ -505,6 +516,14 @@ function drawParticles() {
             ctx.fillStyle = p.color;
             ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
             ctx.restore();
+        } else if (p.type === 'death_emoji') {
+            ctx.save();
+            ctx.globalAlpha = alpha;
+            ctx.font = `${p.size}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(p.emoji, p.x, p.y);
+            ctx.restore();
         } else {
             // smoke, exhaust, spark all use circular soft blobs
             ctx.save();
@@ -576,10 +595,15 @@ function detectPlayerEventsAndUpdatePrev(newPlayers) {
             // Death transition: was alive, now not
             if (prev.alive && !p.alive) {
                 spawnDeathExplosion(prev.x, prev.y, p.color);
+                if (prev.lastEmoji) {
+                    spawnDeathEmoji(prev.x, prev.y, prev.lastEmoji);
+                }
             }
         }
         prevPlayerState.set(p.id, {
-            x: p.x, y: p.y, alive: p.alive, health: p.health
+            x: p.x, y: p.y, alive: p.alive, health: p.health,
+            // Keep the last known emoji even after it expires on the tank
+            lastEmoji: p.emoji || (prev ? prev.lastEmoji : null)
         });
     });
     // Clean up players who left
