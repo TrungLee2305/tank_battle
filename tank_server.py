@@ -15,6 +15,7 @@ import time
 import math
 import logging
 import traceback
+import gevent
 from collections import Counter
 from typing import Dict, List, Tuple
 from flask import Flask, render_template, send_from_directory, request
@@ -71,7 +72,7 @@ TANK_SIZE = 30
 TANK_SPEED = 5.0  # Base tank speed
 TANK_ROTATION_SPEED = 0.1
 TANK_MAX_HEALTH = 100
-BULLET_SPEED = 9.2  # Increased by 15%
+BULLET_SPEED = 10.12  # Increased by 10%
 BULLET_SIZE = 6
 BULLET_DAMAGE = 25
 BULLET_LIFETIME = 115  # Increased by 15%
@@ -99,6 +100,8 @@ DUEL_BASE_SIZE = 80             # Size of base visual
 players: Dict[str, dict] = {}
 bullets: List[dict] = []
 terrain: List[dict] = []
+terrain_ramparts: List[dict] = []  # Cached subset — ramparts only (for collision)
+terrain_bushes: List[dict] = []    # Cached subset — bushes only (for visibility)
 supply_drops: List[dict] = []  # Current supply drops on map (up to 2)
 last_supply_drop_time: float = 0  # Last time supply drops spawned
 last_super_drop_time: float = 0  # Last time super drop spawned
@@ -107,12 +110,14 @@ last_snake_time: float = 0  # Last time snake spawned
 shield_drop: dict = None  # Current shield drop on map (None if no shield active)
 last_shield_drop_time: float = 0  # Last time shield drop spawned
 atomic_bomb: dict = None  # Current atomic bomb on map (None if no bomb active)
-last_atomic_bomb_time: float = 0  # Last time atomic bomb spawned
+last_atomic_bomb_time: float = 0  # Last time atomic bomb spawned (kept for reference)
+last_bomb_gone_time: float = 0  # Timestamp when world became bomb-free (no map + no carrier)
 current_captain_id: str = None  # ID of current captain (None if no captain)
 last_captain_time: float = 0  # Last time captain was selected
 last_captain_target_time: float = 0  # Last time the captain target effect/notification was triggered
 game_running = False
 terrain_generated = False
+tick_count: int = 0  # Global tick counter (used by transformer damage interval)
 
 # Duel Mode State
 team_red_kills = 0              # Red team total kills
@@ -145,14 +150,14 @@ SNAKE_WIDTH_CELLS = 3  # Width in cells
 SNAKE_LENGTH_CELLS = 26  # Length in cells
 SNAKE_WIDTH = SNAKE_CELL_SIZE * SNAKE_WIDTH_CELLS  # 90 pixels wide
 SNAKE_LENGTH = SNAKE_CELL_SIZE * SNAKE_LENGTH_CELLS  # 390 pixels long
-SNAKE_SPEED = 15  # Speed of snake movement
+SNAKE_SPEED = 13.5  # Reduced by 10%
 
 # Shield power-up constants
 SHIELD_DROP_INTERVAL = 10  # seconds between shield drops
 SHIELD_DURATION = 6  # seconds shield lasts
 
 # Atomic Bomb constants
-ATOMIC_BOMB_INTERVAL = 60  # seconds between atomic bomb spawns
+ATOMIC_BOMB_RESPAWN_DELAY = 5  # seconds after world becomes bomb-free before spawning new one
 ATOMIC_BOMB_SIZE = 40  # Size of atomic bomb visual
 ATOMIC_BOMB_PREPARATION = 3.0  # seconds preparation phase (warning, frozen in place)
 ATOMIC_BOMB_FREEZE = 2.0  # seconds post-detonation frozen phase
@@ -184,7 +189,7 @@ EMOJI_LIST = [
 EMOJI_DISPLAY_DURATION = 5.0  # seconds an emoji stays visible above the tank
 
 # Ultimate Skill constants
-SKILL_COOLDOWN = 30  # seconds cooldown (starts after skill ends)
+SKILL_COOLDOWN = 30  # default cooldown (overridden per-skill below)
 SKILL_SPEED_DEMON_DURATION = 4  # seconds
 SKILL_SPEED_DEMON_SPEED_MULT = 5.0  # 400% increase = 5x speed
 SKILL_SPEED_DEMON_DAMAGE_BONUS = 100  # +100 damage per bullet
@@ -193,6 +198,22 @@ SKILL_LASER_BEAM_DURATION = 0.5  # seconds firing phase
 SKILL_LASER_BEAM_COOLDOWN = 1.0  # seconds post-firing frozen phase
 SKILL_LASER_RANGE = 800  # Laser reach distance
 SKILL_GHOST_MODE_DURATION = 5  # seconds
+# Per-skill cooldowns (seconds, starts after skill ends)
+SKILL_COOLDOWN_SPEED_DEMON  = 20
+SKILL_COOLDOWN_LASER_BEAM   = 30   # + post-fire freeze
+SKILL_COOLDOWN_GHOST_MODE   = 25
+SKILL_COOLDOWN_GRAVITY      = 25
+SKILL_COOLDOWN_TRANSFORMER  = 24
+# Gravity skill constants
+SKILL_GRAVITY_PREPARATION = 1.0           # seconds charge phase (frozen in place)
+SKILL_GRAVITY_RADIUS = 500                # 500 px radius
+SKILL_GRAVITY_DAMAGE = 50            # HP dealt to players in radius
+SKILL_GRAVITY_FREEZE_DURATION = 3.0  # seconds targets are immobilised
+# Transformer skill constants
+SKILL_TRANSFORMER_DURATION = 8.0          # seconds active
+SKILL_TRANSFORMER_SPEED_MULT = 0.8        # additive bonus (+80% speed)
+SKILL_TRANSFORMER_DAMAGE = 50             # HP per hit
+SKILL_TRANSFORMER_DAMAGE_TICKS = 15       # ticks between hits (0.5s at 30Hz)
 
 # Colors for different players
 TANK_COLORS = [
@@ -945,13 +966,15 @@ def generate_terrain(map_type: str = None, game_mode: str = None):
 
     terrain_generated = True
 
+    # Rebuild pre-split terrain caches
+    global terrain_ramparts, terrain_bushes
+    terrain_ramparts = [obj for obj in terrain if obj['type'] == 'rampart']
+    terrain_bushes = [obj for obj in terrain if obj['type'] == 'bush']
+
 
 def check_terrain_collision(x: float, y: float, width: float, height: float) -> bool:
     """Check if a rectangle collides with ramparts (bushes don't block movement)"""
-    for obj in terrain:
-        if obj['type'] != 'rampart':
-            continue
-
+    for obj in terrain_ramparts:
         # AABB collision detection
         if (x < obj['x'] + obj['width'] and
             x + width > obj['x'] and
@@ -961,17 +984,46 @@ def check_terrain_collision(x: float, y: float, width: float, height: float) -> 
     return False
 
 
+def _push_out_of_wall(tank: dict):
+    """After Ghost Mode ends, nudge tank out of any rampart it overlaps."""
+    half = TANK_SIZE / 2
+    tx, ty = tank['x'], tank['y']
+    for obj in terrain_ramparts:
+        ox, oy, ow, oh = obj['x'], obj['y'], obj['width'], obj['height']
+        # AABB overlap check
+        if not (tx + half > ox and tx - half < ox + ow and
+                ty + half > oy and ty - half < oy + oh):
+            continue
+        # Compute penetration depth on each axis, push along shallowest
+        over_left  = (tx + half) - ox
+        over_right = (ox + ow) - (tx - half)
+        over_top   = (ty + half) - oy
+        over_bot   = (oy + oh) - (ty - half)
+        min_x = over_left if over_left < over_right else -over_right
+        min_y = over_top  if over_top  < over_bot   else -over_bot
+        if abs(min_x) < abs(min_y):
+            tank['x'] += min_x + (2 if min_x > 0 else -2)
+        else:
+            tank['y'] += min_y + (2 if min_y > 0 else -2)
+        break  # one nudge per frame is enough; next tick will handle remaining
+
+
 def check_in_bush(x: float, y: float) -> bool:
     """Check if a tank position is inside a bush (for invisibility)"""
-    for obj in terrain:
-        if obj['type'] != 'bush':
-            continue
-
-        # Check if tank center is inside bush
+    for obj in terrain_bushes:
         if (x >= obj['x'] and x <= obj['x'] + obj['width'] and
-            y >= obj['y'] and y <= obj['y'] + obj['height']):
+                y >= obj['y'] and y <= obj['y'] + obj['height']):
             return True
     return False
+
+
+def get_bush_index(x: float, y: float) -> int:
+    """Return index of bush tank is inside, or -1 if not in any bush."""
+    for i, obj in enumerate(terrain_bushes):
+        if (x >= obj['x'] and x <= obj['x'] + obj['width'] and
+                y >= obj['y'] and y <= obj['y'] + obj['height']):
+            return i
+    return -1
 
 
 def is_position_safe(x: float, y: float) -> bool:
@@ -1217,6 +1269,17 @@ def spawn_atomic_bomb():
     socketio.emit('atomic_bomb_spawned', {'x': x, 'y': y})
 
 
+def drop_atomic_bomb_at(x: float, y: float):
+    """Drop atomic bomb at carrier's death position so others can pick it up"""
+    global atomic_bomb
+    # Clamp to safe area away from edges
+    bx = max(40, min(WORLD_WIDTH - 40, x))
+    by = max(40, min(WORLD_HEIGHT - 40, y))
+    atomic_bomb = {'x': bx, 'y': by, 'size': ATOMIC_BOMB_SIZE}
+    print(f'💣 ATOMIC BOMB dropped at ({int(bx)}, {int(by)})!')
+    socketio.emit('atomic_bomb_spawned', {'x': bx, 'y': by})
+
+
 def select_captain():
     """Select a random alive player/bot as the captain"""
     global current_captain_id, last_captain_time, last_captain_target_time
@@ -1295,7 +1358,7 @@ def check_atomic_bomb_collection(tank: dict):
     return False
 
 
-def check_shield_collection(tank: dict):
+def check_shield_collection(tank: dict, current_time: float):
     """Check if tank collected the shield drop"""
     global shield_drop
 
@@ -1313,9 +1376,9 @@ def check_shield_collection(tank: dict):
         if 'invincibility_shield' not in tank['powerups']:
             tank['powerups'].append('invincibility_shield')
 
-        # Set timer if not already set or expired
-        if tank['powerup_end_time'] == 0 or time.time() >= tank['powerup_end_time']:
-            tank['powerup_end_time'] = time.time() + SHIELD_DURATION
+        # Stack shield duration, cap at 10s remaining
+        current_remaining = max(0.0, tank['powerup_end_times'].get('invincibility_shield', 0) - current_time)
+        tank['powerup_end_times']['invincibility_shield'] = current_time + min(current_remaining + SHIELD_DURATION, 10.0)
 
         shield_drop = None
         return True
@@ -1323,7 +1386,7 @@ def check_shield_collection(tank: dict):
     return False
 
 
-def check_supply_drop_collection(tank: dict):
+def check_supply_drop_collection(tank: dict, current_time: float):
     """Check if tank collected any supply drop"""
     global supply_drops
 
@@ -1331,57 +1394,60 @@ def check_supply_drop_collection(tank: dict):
         return None
 
     for drop in supply_drops[:]:  # Iterate over copy
-        # Check distance between tank center and supply drop center (use squared distance to avoid expensive sqrt)
         dx = tank['x'] - drop['x']
         dy = tank['y'] - drop['y']
         dist_squared = dx * dx + dy * dy
 
-        # Collection radius (tank size + supply drop size)
         collection_radius = (TANK_SIZE + drop['size']) / 2
 
         if dist_squared < collection_radius * collection_radius:
-            # Add power-up to list (stacking)
+            MAX_FAN_STACKS = 3    # 3×3 = 9 bullets max
+            MAX_SPEED_STACKS = 4  # 1 + 4×1.0 = 5× = 500% max
+
             if drop['type'] == 'super_powerup':
-                # Super power-up adds all 3 abilities
-                for ability in ['fast_fire', 'fan_shot', 'speed_boost']:
-                    if ability not in tank['powerups']:
+                for ability, max_s in [('fan_shot', MAX_FAN_STACKS), ('speed_boost', MAX_SPEED_STACKS)]:
+                    if tank['powerups'].count(ability) < max_s:
                         tank['powerups'].append(ability)
-                duration = SUPER_POWERUP_DURATION
+                    # Each type gets its own refreshed timer
+                    tank['powerup_end_times'][ability] = current_time + SUPER_POWERUP_DURATION
+                if 'fast_fire' not in tank['powerups']:
+                    tank['powerups'].append('fast_fire')
+                tank['powerup_end_times']['fast_fire'] = current_time + SUPER_POWERUP_DURATION
             else:
-                # Regular power-up
-                if drop['type'] not in tank['powerups']:
+                if drop['type'] in ('fan_shot', 'speed_boost'):
+                    max_s = MAX_FAN_STACKS if drop['type'] == 'fan_shot' else MAX_SPEED_STACKS
+                    if tank['powerups'].count(drop['type']) < max_s:
+                        tank['powerups'].append(drop['type'])
+                elif drop['type'] not in tank['powerups']:
                     tank['powerups'].append(drop['type'])
-                duration = POWERUP_DURATION
+                # REFRESH this type's timer independently
+                tank['powerup_end_times'][drop['type']] = current_time + POWERUP_DURATION
 
-            # Set timer based on first power-up collected
-            if tank['powerup_end_time'] == 0 or time.time() >= tank['powerup_end_time']:
-                tank['powerup_end_time'] = time.time() + duration
-            # If already has active power-ups, new ones use same timer
+            fan_count = tank['powerups'].count('fan_shot')
+            spd_count = tank['powerups'].count('speed_boost')
+            print(f'⚡ {tank["name"]} collected {drop["type"].upper()}! fan×{fan_count} speed×{spd_count}')
 
-            print(f'⚡ {tank["name"]} collected {drop["type"].upper()} power-up! Active: {tank["powerups"]}')
-
-            # Remove supply drop
             supply_drops.remove(drop)
             return drop['type']
 
     return None
 
 
-def update_powerups():
-    """Update power-up timers and remove expired ones"""
-    current_time = time.time()
-
+def update_powerups(current_time):
+    """Update power-up timers — each type expires independently"""
     for player_id, tank in players.items():
-        if tank['powerups'] and current_time >= tank['powerup_end_time']:
-            print(f'⏰ {tank["name"]}\'s power-ups expired: {tank["powerups"]}')
-            tank['powerups'] = []
-            tank['powerup_end_time'] = 0
+        for ptype in list(tank.get('powerup_end_times', {}).keys()):
+            if current_time >= tank['powerup_end_times'][ptype]:
+                before = tank['powerups'].count(ptype)
+                tank['powerups'] = [p for p in tank['powerups'] if p != ptype]
+                del tank['powerup_end_times'][ptype]
+                if before:
+                    print(f'⏰ {tank["name"]}\'s {ptype}×{before} expired')
 
 
-def update_skills():
+def update_skills(current_time):
     """Update active skills and handle cooldowns"""
-    global snake
-    current_time = time.time()
+    global snake, current_captain_id
 
     for player_id, tank in players.items():
         # Cancel laser preparation if tank died
@@ -1390,12 +1456,20 @@ def update_skills():
             tank['laser_preparation_end'] = 0
             print(f'❌ {tank["name"]}\'s laser preparation cancelled - tank died!')
 
-        # Cancel bomb preparation if tank died
+        # Cancel bomb preparation if tank died — drop bomb at death position
         if tank.get('bomb_preparing', False) and not tank['alive']:
             tank['bomb_preparing'] = False
             tank['bomb_preparation_end'] = 0
-            tank['has_atomic_bomb'] = False  # Drop the bomb
-            print(f'❌ {tank["name"]}\'s bomb preparation cancelled - tank died!')
+            if tank.get('has_atomic_bomb', False):
+                drop_atomic_bomb_at(tank['x'], tank['y'])
+                tank['has_atomic_bomb'] = False
+            print(f'❌ {tank["name"]}\'s bomb preparation cancelled - tank died! Bomb dropped.')
+
+        # Cancel gravity preparation if tank died
+        if tank.get('gravity_preparing', False) and not tank['alive']:
+            tank['gravity_preparing'] = False
+            tank['gravity_preparation_end'] = 0
+            print(f'❌ {tank["name"]}\'s gravity preparation cancelled - tank died!')
 
         # Handle laser beam preparation phase
         if tank.get('laser_preparing', False) and tank['alive'] and current_time >= tank['laser_preparation_end']:
@@ -1432,6 +1506,51 @@ def update_skills():
         if tank.get('bomb_freezing', False) and current_time >= tank['bomb_freeze_end']:
             tank['bomb_freezing'] = False
             print(f'✅ {tank["name"]} bomb freeze complete - movement restored')
+
+        # Handle gravity preparation phase → detonate
+        if tank.get('gravity_preparing', False) and tank['alive'] and current_time >= tank['gravity_preparation_end']:
+            tank['gravity_preparing'] = False
+            detonate_gravity(player_id, tank, current_time)
+            # Cooldown starts immediately after detonation
+            tank['skill_cooldown_end'] = current_time + SKILL_COOLDOWN_GRAVITY
+
+        # Handle Transformer skill — melee contact damage
+        if tank['skill_active'] and tank['skill'] == 'transformer' and tank['alive']:
+            dmg_targets = tank.setdefault('transformer_damage_targets', {})
+            for target_id, target in players.items():
+                if target_id == player_id or not target['alive']:
+                    continue
+                dx = target['x'] - tank['x']
+                dy = target['y'] - tank['y']
+                contact_radius = TANK_SIZE  # touching distance
+                if dx * dx + dy * dy >= contact_radius * contact_radius:
+                    continue
+                is_invincible = (
+                    (target['skill_active'] and target['skill'] == 'ghost_mode') or
+                    (current_time < target['invincible_until']) or
+                    ('invincibility_shield' in target['powerups'])
+                )
+                if is_invincible:
+                    continue
+                last_tick = dmg_targets.get(target_id, 0)
+                if tick_count - last_tick >= SKILL_TRANSFORMER_DAMAGE_TICKS:
+                    dmg_targets[target_id] = tick_count
+                    target['health'] = max(0, target['health'] - SKILL_TRANSFORMER_DAMAGE)
+                    if target['health'] <= 0:
+                        target['alive'] = False
+                        target['respawn_timer'] = RESPAWN_TIME * GAME_TICK_RATE
+                        target['deaths'] += 1
+                        tank['kills'] += 1
+                        tank['score'] += 100
+                        was_captain = target.get('is_captain', False)
+                        if was_captain:
+                            target['is_captain'] = False
+                            global current_captain_id
+                            current_captain_id = None
+                        socketio.emit('death', {'id': target_id, 'killer': tank['name'], 'killed': target['name']})
+                        socketio.emit('tank_destroyed', {'victim_id': target_id, 'victim_name': target['name'], 'killer_id': player_id, 'killer_name': tank['name']})
+                        if was_captain:
+                            select_captain()
 
         # Handle Laser Beam skill - instant kill in laser path
         if tank['skill_active'] and tank['skill'] == 'laser_beam' and tank['alive']:
@@ -1578,7 +1697,6 @@ def update_skills():
                     was_captain = target.get('is_captain', False)
                     if was_captain:
                         target['is_captain'] = False
-                        global current_captain_id
                         current_captain_id = None
                         print(f'👑🔴 Captain {target["name"]} killed by laser beam - status removed!')
 
@@ -1595,21 +1713,38 @@ def update_skills():
 
         # Check if skill duration ended
         if tank['skill_active'] and current_time >= tank['skill_end_time']:
-            skill_names = {'speed_demon': 'Speed Demon', 'laser_beam': 'Laser Beam', 'ghost_mode': 'Ghost Mode'}
+            skill_names = {'speed_demon': 'Speed Demon', 'laser_beam': 'Laser Beam', 'ghost_mode': 'Ghost Mode',
+                           'gravity': 'Gravity', 'transformer': 'Transformer'}
             print(f'⏰ {tank["name"]}\'s {skill_names.get(tank["skill"], tank["skill"])} ended - cooldown starting')
 
             tank['skill_active'] = False
+            if tank['skill'] == 'transformer':
+                tank['transformer_damage_targets'] = {}  # reset on deactivation
 
-            # For laser beam, enter post-firing frozen state
+            # Per-skill cooldown table
+            _cooldowns = {
+                'speed_demon':  SKILL_COOLDOWN_SPEED_DEMON,
+                'laser_beam':   SKILL_COOLDOWN_LASER_BEAM,
+                'ghost_mode':   SKILL_COOLDOWN_GHOST_MODE,
+                'gravity':      SKILL_COOLDOWN_GRAVITY,
+                'transformer':  SKILL_COOLDOWN_TRANSFORMER,
+            }
+            _cd = _cooldowns.get(tank['skill'], SKILL_COOLDOWN)
+
             if tank['skill'] == 'laser_beam':
                 tank['laser_cooling_down'] = True
                 tank['laser_cooldown_end'] = current_time + SKILL_LASER_BEAM_COOLDOWN
                 print(f'❄️ {tank["name"]} entering post-laser cooldown (1s frozen)')
-                # Full skill cooldown starts after post-firing phase ends
-                tank['skill_cooldown_end'] = tank['laser_cooldown_end'] + SKILL_COOLDOWN
-            else:
-                # Start cooldown AFTER skill ends for other skills
-                tank['skill_cooldown_end'] = current_time + SKILL_COOLDOWN
+                tank['skill_cooldown_end'] = tank['laser_cooldown_end'] + _cd
+
+            elif tank['skill'] == 'ghost_mode':
+                # Push tank out of any wall it may be inside when ghost ends
+                _push_out_of_wall(tank)
+                tank['skill_cooldown_end'] = current_time + _cd
+
+            elif tank['skill'] != 'gravity':
+                # gravity already set cooldown at detonation time
+                tank['skill_cooldown_end'] = current_time + _cd
 
 
 def get_team_assignment() -> str:
@@ -1723,10 +1858,15 @@ def create_tank(player_id: str, name: str, color: str = None, skill: str = None,
         tank_color = color if color else TANK_COLORS[color_index]
 
     # Tank class determines visual body + fixed ultimate
-    if tank_class not in ('gun', 'light', 'armored'):
+    if tank_class not in ('gun', 'light', 'armored', 'gravity', 'transformer'):
         tank_class = 'gun'
-    # Use selected skill or default to speed_demon
-    tank_skill = skill if skill in ['speed_demon', 'laser_beam', 'ghost_mode'] else 'speed_demon'
+    # gravity/transformer classes force their paired ultimate
+    if tank_class == 'gravity':
+        tank_skill = 'gravity'
+    elif tank_class == 'transformer':
+        tank_skill = 'transformer'
+    else:
+        tank_skill = skill if skill in ['speed_demon', 'laser_beam', 'ghost_mode'] else 'speed_demon'
 
     return {
         'id': player_id,
@@ -1747,7 +1887,7 @@ def create_tank(player_id: str, name: str, color: str = None, skill: str = None,
         'shoot_cooldown': 0,
         'respawn_timer': 0,
         'powerups': [],  # List of active power-up types
-        'powerup_end_time': 0,  # When all power-ups expire (based on first collected)
+        'powerup_end_times': {},  # {type: end_time} — each power-up expires independently
         'invincible_until': time.time() + 3.0,  # 3 seconds of spawn protection
         'skill': tank_skill,  # Ultimate skill type
         'skill_active': False,  # Whether skill is currently active
@@ -1763,6 +1903,16 @@ def create_tank(player_id: str, name: str, color: str = None, skill: str = None,
         'bomb_preparation_end': 0,  # When preparation ends and bomb detonates
         'bomb_freezing': False,  # Post-detonation freeze phase
         'bomb_freeze_end': 0,  # When freeze phase ends
+        'gravity_preparing': False,
+        'gravity_preparation_end': 0,
+        'gravity_frozen_until': 0,
+        'transformer_damage_targets': {},
+        # Gravity skill state
+        'gravity_preparing': False,
+        'gravity_preparation_end': 0,
+        'gravity_frozen_until': 0,   # Tank is immobilised until this time (hit by gravity)
+        # Transformer skill state
+        'transformer_damage_targets': {},  # {target_id: last_damage_tick_count}
         'is_captain': False,  # Whether this tank is the current captain
         'captain_targeted_until': 0,  # Unix time until the "hunt the captain" effect expires
         'team': team,  # Team assignment ('red', 'blue', or None)
@@ -1826,7 +1976,7 @@ def create_bot(bot_name: str, team: str = None) -> tuple:
         'shoot_cooldown': 0,
         'respawn_timer': 0,
         'powerups': [],
-        'powerup_end_time': 0,
+        'powerup_end_times': {},
         'invincible_until': time.time() + 3.0,
         'skill': bot_skill,
         'skill_active': False,
@@ -1960,24 +2110,27 @@ def update_bot_ai(bot: dict):
     if bot['shoot_timer'] >= BOT_SHOOT_INTERVAL and bot['shoot_cooldown'] == 0:
         bot['shoot_timer'] = 0
 
-        # Fire bullet
-        has_fan_shot = 'fan_shot' in bot['powerups']
+        # Fire bullet (stacking: same logic as human)
+        fan_shot_count = bot['powerups'].count('fan_shot')
         has_fast_fire = 'fast_fire' in bot['powerups']
+        bot_is_captain = bot.get('is_captain', False)
 
-        if has_fan_shot:
-            # Fire 3 bullets in fan pattern
+        captain_fans = 3 if bot_is_captain else 0
+        num_bullets = captain_fans + fan_shot_count * FAN_SHOT_BULLETS
+        if num_bullets < 1:
+            num_bullets = 1
+
+        if num_bullets == 1:
+            bullet = create_bullet(bot, bot['angle'])
+            bullets.append(bullet)
+        else:
             center_angle = bot['angle']
             spread_start = center_angle - FAN_SHOT_SPREAD / 2
-
-            for i in range(FAN_SHOT_BULLETS):
-                angle_offset = (FAN_SHOT_SPREAD / (FAN_SHOT_BULLETS - 1)) * i
+            for i in range(num_bullets):
+                angle_offset = (FAN_SHOT_SPREAD / (num_bullets - 1)) * i
                 bullet_angle = spread_start + angle_offset
                 bullet = create_bullet(bot, bullet_angle)
                 bullets.append(bullet)
-        else:
-            # Fire single bullet
-            bullet = create_bullet(bot, bot['angle'])
-            bullets.append(bullet)
 
         # Set cooldown based on fast_fire
         if has_fast_fire:
@@ -2012,7 +2165,7 @@ def check_and_manage_bots():
         remove_all_bots()
 
 
-def update_tank_movement(tank: dict):
+def update_tank_movement(tank: dict, current_time: float):
     """Update tank velocity based on key inputs"""
     if not tank['alive']:
         return
@@ -2025,6 +2178,12 @@ def update_tank_movement(tank: dict):
 
     # Freeze tank if preparing atomic bomb or in post-detonation freeze
     if tank.get('bomb_preparing', False) or tank.get('bomb_freezing', False):
+        tank['vx'] = 0
+        tank['vy'] = 0
+        return
+
+    # Freeze tank if charging gravity skill or frozen by an enemy gravity pulse
+    if tank.get('gravity_preparing', False) or current_time < tank.get('gravity_frozen_until', 0):
         tank['vx'] = 0
         tank['vy'] = 0
         return
@@ -2050,18 +2209,22 @@ def update_tank_movement(tank: dict):
     if move_x != 0 or move_y != 0:
         magnitude = math.sqrt(move_x ** 2 + move_y ** 2)
 
-        # Apply speed boost if active
-        speed = TANK_SPEED
-        if 'speed_boost' in tank['powerups']:
-            speed = TANK_SPEED * SPEED_BOOST_MULTIPLIER
-
-        # Apply Captain buff (+50% speed)
+        # Build speed multiplier additively (stacking)
+        speed_mult = 1.0
+        speed_boost_count = tank['powerups'].count('speed_boost')
+        if speed_boost_count > 0:
+            speed_mult += speed_boost_count * (SPEED_BOOST_MULTIPLIER - 1.0)  # +1.0x per stack
         if tank.get('is_captain', False):
-            speed = TANK_SPEED * CAPTAIN_SPEED_MULTIPLIER
+            speed_mult += (CAPTAIN_SPEED_MULTIPLIER - 1.0)  # +0.5x
+        if tank['skill_active'] and tank['skill'] == 'transformer':
+            speed_mult += SKILL_TRANSFORMER_SPEED_MULT  # +0.5x
+        speed_mult = min(speed_mult, 5.0)  # cap at 5× (500%)
 
-        # Apply Speed Demon ultimate skill boost (400% = 5x speed)
+        # Speed Demon ultimate overrides everything
         if tank['skill_active'] and tank['skill'] == 'speed_demon':
-            speed = TANK_SPEED * SKILL_SPEED_DEMON_SPEED_MULT
+            speed_mult = SKILL_SPEED_DEMON_SPEED_MULT
+
+        speed = TANK_SPEED * speed_mult
 
         tank['vx'] = (move_x / magnitude) * speed
         tank['vy'] = (move_y / magnitude) * speed
@@ -2121,16 +2284,16 @@ def update_tank_movement(tank: dict):
         elif tank['y'] > ARENA_HEIGHT - margin:
             tank['y'] = ARENA_HEIGHT - margin
     else:
-        # FFA mode: Wrap around edges
+        # FFA mode: Hard boundaries (no wrap-around)
         if tank['x'] < margin:
-            tank['x'] = ARENA_WIDTH - margin
-        elif tank['x'] > ARENA_WIDTH - margin:
             tank['x'] = margin
+        elif tank['x'] > ARENA_WIDTH - margin:
+            tank['x'] = ARENA_WIDTH - margin
 
         if tank['y'] < margin:
-            tank['y'] = ARENA_HEIGHT - margin
-        elif tank['y'] > ARENA_HEIGHT - margin:
             tank['y'] = margin
+        elif tank['y'] > ARENA_HEIGHT - margin:
+            tank['y'] = ARENA_HEIGHT - margin
 
 
 def check_win_condition():
@@ -2171,6 +2334,22 @@ def update_bullets(current_time):
     """Update bullet positions and handle collisions"""
     global bullets, snake, red_base, blue_base, team_red_kills, team_blue_kills
 
+    # Precompute snake cell centers once per tick (avoid repeating 26×trig per bullet)
+    _snake_cells = []
+    if snake is not None and snake['health'] > 0:
+        perp = snake['direction'] + math.pi / 2
+        cos_d = math.cos(snake['direction'])
+        sin_d = math.sin(snake['direction'])
+        cos_p = math.cos(perp)
+        sin_p = math.sin(perp)
+        for i in range(SNAKE_LENGTH_CELLS):
+            t = i / (SNAKE_LENGTH_CELLS - 1) if SNAKE_LENGTH_CELLS > 1 else 0
+            sx = snake['x'] - cos_d * snake['length'] * t
+            sy = snake['y'] - sin_d * snake['length'] * t
+            for w in (-1, 0, 1):
+                _snake_cells.append((sx + cos_p * w * SNAKE_CELL_SIZE,
+                                     sy + sin_p * w * SNAKE_CELL_SIZE))
+
     bullets_to_remove = []
 
     for bullet in bullets:
@@ -2179,16 +2358,10 @@ def update_bullets(current_time):
         bullet['y'] += bullet['vy']
         bullet['lifetime'] -= 1
 
-        # Wrap around edges
-        if bullet['x'] < 0:
-            bullet['x'] = ARENA_WIDTH
-        elif bullet['x'] > ARENA_WIDTH:
-            bullet['x'] = 0
-
-        if bullet['y'] < 0:
-            bullet['y'] = ARENA_HEIGHT
-        elif bullet['y'] > ARENA_HEIGHT:
-            bullet['y'] = 0
+        # Remove bullet if it exits the arena
+        if bullet['x'] < 0 or bullet['x'] > ARENA_WIDTH or bullet['y'] < 0 or bullet['y'] > ARENA_HEIGHT:
+            bullets_to_remove.append(bullet)
+            continue
 
         # Remove if lifetime expired
         if bullet['lifetime'] <= 0:
@@ -2233,7 +2406,6 @@ def update_bullets(current_time):
                 bullet['x'] = prev_x + bullet['vx']
                 bullet['y'] = prev_y + bullet['vy']
 
-                print(f'🔀 Bullet ricochet! {bullet["ricochets_left"]} bounces left')
             else:
                 # No ricochets left, remove bullet
                 bullets_to_remove.append(bullet)
@@ -2242,31 +2414,14 @@ def update_bullets(current_time):
             # Not colliding with wall, continue
             pass
 
-        # Check collision with snake
+        # Check collision with snake (uses snake_cells precomputed once per tick, below)
         if snake is not None and snake['health'] > 0:
-            # Check all 39 cells of the snake (13 length × 3 width)
             snake_hit = False
-            segments = []
-            for i in range(SNAKE_LENGTH_CELLS):
-                t = i / (SNAKE_LENGTH_CELLS - 1) if SNAKE_LENGTH_CELLS > 1 else 0
-                segment_x = snake['x'] - math.cos(snake['direction']) * snake['length'] * t
-                segment_y = snake['y'] - math.sin(snake['direction']) * snake['length'] * t
-                segments.append((segment_x, segment_y))
-
-            perpendicular_angle = snake['direction'] + math.pi / 2
-
-            for segment_x, segment_y in segments:
-                for width_offset in [-1, 0, 1]:
-                    cell_x = segment_x + math.cos(perpendicular_angle) * width_offset * SNAKE_CELL_SIZE
-                    cell_y = segment_y + math.sin(perpendicular_angle) * width_offset * SNAKE_CELL_SIZE
-
-                    # Check if bullet hits this snake cell
-                    cell_half_size = SNAKE_CELL_SIZE / 2
-                    if (bullet['x'] >= cell_x - cell_half_size and bullet['x'] <= cell_x + cell_half_size and
-                        bullet['y'] >= cell_y - cell_half_size and bullet['y'] <= cell_y + cell_half_size):
-                        snake_hit = True
-                        break
-                if snake_hit:
+            cell_half_size = SNAKE_CELL_SIZE / 2
+            for cell_x, cell_y in _snake_cells:
+                if (bullet['x'] >= cell_x - cell_half_size and bullet['x'] <= cell_x + cell_half_size and
+                    bullet['y'] >= cell_y - cell_half_size and bullet['y'] <= cell_y + cell_half_size):
+                    snake_hit = True
                     break
 
             if snake_hit:
@@ -2333,20 +2488,6 @@ def update_bullets(current_time):
                     continue
 
         # Check collision with tanks
-        # Early skip for bullets far from any tanks (spatial optimization)
-        closest_tank_dist = float('inf')
-        for tank in players.values():
-            if tank['alive']:
-                dx = tank['x'] - bullet['x']
-                dy = tank['y'] - bullet['y']
-                dist = dx*dx + dy*dy  # Squared distance (faster than sqrt)
-                if dist < closest_tank_dist:
-                    closest_tank_dist = dist
-
-        # Skip detailed checks if bullet is far from all tanks (>200px)
-        if closest_tank_dist > 40000:  # 200*200
-            continue
-
         for player_id, tank in players.items():
             if not tank['alive'] or player_id == bullet['owner_id']:
                 continue
@@ -2389,10 +2530,10 @@ def update_bullets(current_time):
                     tank['deaths'] += 1
                     tank['respawn_timer'] = RESPAWN_TIME * GAME_TICK_RATE  # Convert seconds to ticks
 
-                    # Drop atomic bomb if player had one
+                    # Drop atomic bomb if player had one (including during preparation)
                     if tank.get('has_atomic_bomb', False):
+                        drop_atomic_bomb_at(tank['x'], tank['y'])
                         tank['has_atomic_bomb'] = False
-                        print(f'💣 {tank["name"]} dropped atomic bomb on death!')
 
                     # Cancel any active preparation states
                     if tank.get('laser_preparing', False):
@@ -2403,13 +2544,17 @@ def update_bullets(current_time):
                     if tank.get('bomb_preparing', False):
                         tank['bomb_preparing'] = False
                         tank['bomb_preparation_end'] = 0
-                        print(f'❌ {tank["name"]}\'s bomb preparation cancelled by death!')
+
+                    if tank.get('gravity_preparing', False):
+                        tank['gravity_preparing'] = False
+                        tank['gravity_preparation_end'] = 0
 
                     # Clear freeze states
                     tank['laser_cooling_down'] = False
                     tank['laser_cooldown_end'] = 0
                     tank['bomb_freezing'] = False
                     tank['bomb_freeze_end'] = 0
+                    tank['transformer_damage_targets'] = {}
 
                     # Check if killed tank was captain BEFORE removing status
                     was_captain = tank.get('is_captain', False)
@@ -2462,10 +2607,10 @@ def update_bullets(current_time):
 
                 break
 
-    # Remove bullets
-    for bullet in bullets_to_remove:
-        if bullet in bullets:
-            bullets.remove(bullet)
+    # Remove bullets (O(n) rebuild instead of O(n²) repeated .remove())
+    if bullets_to_remove:
+        remove_set = set(id(b) for b in bullets_to_remove)
+        bullets = [b for b in bullets if id(b) not in remove_set]
 
 
 def create_bullet(tank: dict, target_angle: float) -> dict:
@@ -2502,10 +2647,12 @@ def create_bullet(tank: dict, target_angle: float) -> dict:
 
 def game_loop():
     """Main game loop that runs on the server"""
-    global game_running, last_super_drop_time, snake, last_snake_time, shield_drop, last_shield_drop_time, atomic_bomb, last_atomic_bomb_time, current_captain_id, last_captain_time, last_captain_target_time
+    global game_running, last_super_drop_time, snake, last_snake_time, shield_drop, last_shield_drop_time, atomic_bomb, last_atomic_bomb_time, last_bomb_gone_time, current_captain_id, last_captain_time, last_captain_target_time, tick_count
     game_running = True
+    tick_count = 0
 
     while game_running:
+        tick_count += 1
         if players or bullets:
             # Cache current time for this tick (called many times, so cache it)
             current_time = time.time()
@@ -2535,11 +2682,18 @@ def game_loop():
                     if shield_drop is None:  # Only spawn if no shield is active
                         spawn_shield_drop()
 
-            # Check if we need to spawn atomic bomb (every 60s)
+            # Spawn new atomic bomb 5s after world becomes completely bomb-free
             if terrain_generated:
-                if last_atomic_bomb_time == 0 or (current_time - last_atomic_bomb_time >= ATOMIC_BOMB_INTERVAL):
-                    if atomic_bomb is None:  # Only spawn if no bomb is active
+                any_carrier = any(t.get('has_atomic_bomb', False) for t in players.values())
+                bomb_exists = atomic_bomb is not None or any_carrier
+                if bomb_exists:
+                    last_bomb_gone_time = 0  # Reset — bomb still in world
+                else:
+                    if last_bomb_gone_time == 0:
+                        last_bomb_gone_time = current_time  # Start 5s countdown
+                    elif current_time - last_bomb_gone_time >= ATOMIC_BOMB_RESPAWN_DELAY:
                         spawn_atomic_bomb()
+                        last_bomb_gone_time = 0  # Reset after spawn
 
             # Check if we need to select initial captain or if no captain exists
             if terrain_generated and current_captain_id is None:
@@ -2566,20 +2720,17 @@ def game_loop():
                 print(f'🎯👑 CAPTAIN HUNT! {captain_tank["name"]} is now the target (+{CAPTAIN_KILL_REWARD} bounty)')
 
             # Update power-up timers
-            update_powerups()
+            update_powerups(current_time)
 
             # Update active skills and cooldowns
-            update_skills()
+            update_skills(current_time)
 
             # Update snake movement
             update_snake()
 
-            # Debug: Show snake status every 3 seconds
-            if snake and int(current_time) % 3 == 0:
-                print(f'🐍 Snake active at ({int(snake["x"])}, {int(snake["y"])}) - direction: {snake["direction"]:.2f}')
-
-            # Check and manage bot spawning/removal
-            check_and_manage_bots()
+            # Check and manage bot spawning/removal (only every 30 ticks = ~1s)
+            if tick_count % 30 == 0:
+                check_and_manage_bots()
 
             # Update all tanks
             for player_id, tank in list(players.items()):
@@ -2588,10 +2739,10 @@ def game_loop():
                     update_bot_ai(tank)
 
                 if tank['alive']:
-                    update_tank_movement(tank)
+                    update_tank_movement(tank, current_time)
 
                     # Check supply drop collection
-                    collected_type = check_supply_drop_collection(tank)
+                    collected_type = check_supply_drop_collection(tank, current_time)
                     if collected_type:
                         socketio.emit('supply_collected', {
                             'player_id': player_id,
@@ -2599,7 +2750,7 @@ def game_loop():
                         })
 
                     # Check shield drop collection
-                    if check_shield_collection(tank):
+                    if check_shield_collection(tank, current_time):
                         socketio.emit('supply_collected', {
                             'player_id': player_id,
                             'powerup_type': 'invincibility_shield'
@@ -2615,10 +2766,10 @@ def game_loop():
                         tank['respawn_timer'] = RESPAWN_TIME * GAME_TICK_RATE
                         tank['deaths'] += 1
 
-                        # Drop atomic bomb if player had one
+                        # Drop atomic bomb if player had one (including during preparation)
                         if tank.get('has_atomic_bomb', False):
+                            drop_atomic_bomb_at(tank['x'], tank['y'])
                             tank['has_atomic_bomb'] = False
-                            print(f'💣 {tank["name"]} dropped atomic bomb on death by snake!')
 
                         # Cancel any active preparation states
                         if tank.get('laser_preparing', False):
@@ -2629,13 +2780,17 @@ def game_loop():
                         if tank.get('bomb_preparing', False):
                             tank['bomb_preparing'] = False
                             tank['bomb_preparation_end'] = 0
-                            print(f'❌ {tank["name"]}\'s bomb preparation cancelled by snake!')
+
+                        if tank.get('gravity_preparing', False):
+                            tank['gravity_preparing'] = False
+                            tank['gravity_preparation_end'] = 0
 
                         # Clear freeze states
                         tank['laser_cooling_down'] = False
                         tank['laser_cooldown_end'] = 0
                         tank['bomb_freezing'] = False
                         tank['bomb_freeze_end'] = 0
+                        tank['transformer_damage_targets'] = {}
 
                         # Remove captain status on death by snake
                         was_captain = tank.get('is_captain', False)
@@ -2727,33 +2882,40 @@ def game_loop():
                         'kills': t['kills'],
                         'deaths': t['deaths'],
                         'respawn_timer': round(t['respawn_timer'] / GAME_TICK_RATE, 1),  # Convert to seconds
-                        'hidden': check_in_bush(t['x'], t['y']) if t['alive'] else False,  # Hidden if in bush
+                        'hidden': check_in_bush(t['x'], t['y']) if t['alive'] else False,
+                        'bush_index': get_bush_index(t['x'], t['y']) if t['alive'] else -1,
                         'powerups': t['powerups'],  # List of active power-ups
-                        'powerup_time_left': max(0, t['powerup_end_time'] - time.time()) if t['powerups'] else 0,
-                        'invincible': time.time() < t['invincible_until'] or 'invincibility_shield' in t['powerups'],
+                        'powerup_times_left': {
+                            k: round(max(0.0, v - current_time), 1)
+                            for k, v in t.get('powerup_end_times', {}).items()
+                        },
+                        'invincible': current_time < t['invincible_until'] or 'invincibility_shield' in t['powerups'],
                         'skill': t['skill'],  # Ultimate skill type
                         'skill_active': t['skill_active'],  # Whether skill is currently active
-                        'skill_time_left': max(0, t['skill_end_time'] - time.time()) if t['skill_active'] else 0,
-                        'skill_cooldown': max(0, t['skill_cooldown_end'] - time.time()),
+                        'skill_time_left': max(0, t['skill_end_time'] - current_time) if t['skill_active'] else 0,
+                        'skill_cooldown': max(0, t['skill_cooldown_end'] - current_time),
                         'laser_preparing': t.get('laser_preparing', False),  # Laser beam preparation phase
-                        'laser_preparation_time_left': max(0, t.get('laser_preparation_end', 0) - time.time()) if t.get('laser_preparing', False) else 0,
+                        'laser_preparation_time_left': max(0, t.get('laser_preparation_end', 0) - current_time) if t.get('laser_preparing', False) else 0,
                         'laser_cooling_down': t.get('laser_cooling_down', False),  # Laser beam post-firing frozen
                         'has_atomic_bomb': t.get('has_atomic_bomb', False),  # Has atomic bomb ready to use
                         'bomb_preparing': t.get('bomb_preparing', False),  # Atomic bomb preparation phase
-                        'bomb_preparation_time_left': max(0, t.get('bomb_preparation_end', 0) - time.time()) if t.get('bomb_preparing', False) else 0,
+                        'bomb_preparation_time_left': max(0, t.get('bomb_preparation_end', 0) - current_time) if t.get('bomb_preparing', False) else 0,
                         'bomb_freezing': t.get('bomb_freezing', False),  # Post-detonation freeze
                         'is_captain': t.get('is_captain', False),  # Captain status
                         'captain_targeted': (
                             t.get('is_captain', False)
-                            and time.time() < t.get('captain_targeted_until', 0)
+                            and current_time < t.get('captain_targeted_until', 0)
                         ),
+                        'gravity_preparing': t.get('gravity_preparing', False),
+                        'gravity_preparation_time_left': max(0, t.get('gravity_preparation_end', 0) - current_time) if t.get('gravity_preparing', False) else 0,
+                        'gravity_frozen': current_time < t.get('gravity_frozen_until', 0),
                         'is_bot': t.get('is_bot', False),  # Identify bots
                         'team': t.get('team'),  # Team assignment (red, blue, or None)
                         # Emoji display: only send while alive and not expired
                         'emoji': (
                             t.get('emoji')
                             if (t.get('alive') and t.get('emoji')
-                                and time.time() < t.get('emoji_end_time', 0))
+                                and current_time < t.get('emoji_end_time', 0))
                             else None
                         )
                     }
@@ -2781,11 +2943,11 @@ def game_loop():
                 'game_winner': game_winner  # Winner ('red', 'blue', or None)
             }
 
-            # Broadcast game state to all clients
-            socketio.emit('game_state', game_state, namespace='/')
+            # Broadcast game state every 2nd tick (15Hz send, 30Hz physics)
+            if tick_count % 2 == 0:
+                socketio.emit('game_state', game_state, namespace='/')
 
         # Sleep to maintain tick rate
-        import gevent
         gevent.sleep(1.0 / GAME_TICK_RATE)
 
 
@@ -2846,12 +3008,14 @@ def handle_join_game(data):
         game_mode_choice = data.get('game_mode', 'ffa')  # Get player's game mode choice
         map_choice = data.get('map_type', 'advanced')  # Get player's map choice
         player_color = data.get('color', None)  # Get custom color
-        player_tank_class = data.get('tank_class', 'gun')  # 'gun' | 'light' | 'armored'
+        player_tank_class = data.get('tank_class', 'gun')
         # Tank class is authoritative: it determines the ultimate skill
         CLASS_TO_SKILL = {
             'gun': 'laser_beam',
             'light': 'speed_demon',
             'armored': 'ghost_mode',
+            'gravity': 'gravity',
+            'transformer': 'transformer',
         }
         if player_tank_class not in CLASS_TO_SKILL:
             player_tank_class = 'gun'
@@ -2888,7 +3052,8 @@ def handle_join_game(data):
         # Create new tank for player with customization and team
         players[player_id] = create_tank(player_id, player_name, player_color, player_skill, player_team, player_tank_class)
 
-        skill_names = {'speed_demon': 'Speed Demon⚡', 'laser_beam': 'Laser Beam🔴', 'ghost_mode': 'Ghost Mode👻'}
+        skill_names = {'speed_demon': 'Speed Demon⚡', 'laser_beam': 'Laser Beam🔴', 'ghost_mode': 'Ghost Mode👻',
+                       'gravity': 'Gravity🌑', 'transformer': 'Transformer🤖'}
         team_str = f' - Team: {player_team.upper()}' if player_team else ''
         print(f'🎮 Player joined: {player_name} ({player_id}) from {client_ip} - Skill: {skill_names.get(player_skill, player_skill)}{team_str}')
 
@@ -2948,33 +3113,33 @@ def handle_shoot():
         tank = players[player_id]
 
         if tank['alive'] and tank['shoot_cooldown'] == 0:
-            # Check for stacked power-ups
-            has_fan_shot = 'fan_shot' in tank['powerups']
+            # Transformer cannot shoot — melee only
+            if tank['skill_active'] and tank['skill'] == 'transformer':
+                return
+
+            # Stacking: fan_shot count + captain base
+            fan_shot_count = tank['powerups'].count('fan_shot')
             has_fast_fire = 'fast_fire' in tank['powerups']
             is_captain = tank.get('is_captain', False)
 
-            # Captain always fires 2-fan bullets (or use fan shot if they have it)
-            if has_fan_shot or is_captain:
-                # Fire bullets in fan pattern
-                num_bullets = FAN_SHOT_BULLETS if has_fan_shot else 2  # Captain fires 2 bullets
-                center_angle = tank['angle']
-                spread = FAN_SHOT_SPREAD if has_fan_shot else 0.2  # Smaller spread for captain
+            # Captain base = 3 bullets; each fan_shot pickup adds FAN_SHOT_BULLETS (3)
+            captain_fans = 2 if is_captain else 0
+            num_bullets = captain_fans + fan_shot_count * FAN_SHOT_BULLETS
+            if num_bullets < 1:
+                num_bullets = 1
 
-                if num_bullets == 1:
-                    # Single bullet
-                    bullet = create_bullet(tank, center_angle)
-                    bullets.append(bullet)
-                else:
-                    spread_start = center_angle - spread / 2
-                    for i in range(num_bullets):
-                        angle_offset = (spread / (num_bullets - 1)) * i
-                        bullet_angle = spread_start + angle_offset
-                        bullet = create_bullet(tank, bullet_angle)
-                        bullets.append(bullet)
-            else:
-                # Fire single bullet
+            if num_bullets == 1:
                 bullet = create_bullet(tank, tank['angle'])
                 bullets.append(bullet)
+            else:
+                center_angle = tank['angle']
+                spread = FAN_SHOT_SPREAD
+                spread_start = center_angle - spread / 2
+                for i in range(num_bullets):
+                    angle_offset = (spread / (num_bullets - 1)) * i
+                    bullet_angle = spread_start + angle_offset
+                    bullet = create_bullet(tank, bullet_angle)
+                    bullets.append(bullet)
 
             # Set cooldown based on fast_fire or captain buff
             if has_fast_fire:
@@ -3018,7 +3183,8 @@ def handle_activate_skill():
 
         # Activate skill!
         skill = tank['skill']
-        skill_names = {'speed_demon': 'Speed Demon ⚡', 'laser_beam': 'Laser Beam 🔴', 'ghost_mode': 'Ghost Mode 👻'}
+        skill_names = {'speed_demon': 'Speed Demon ⚡', 'laser_beam': 'Laser Beam 🔴',
+                       'ghost_mode': 'Ghost Mode 👻', 'gravity': 'Gravity 🌑', 'transformer': 'Transformer 🤖'}
 
         if skill == 'laser_beam':
             # Laser beam starts with preparation phase
@@ -3026,18 +3192,32 @@ def handle_activate_skill():
             tank['laser_preparation_end'] = current_time + SKILL_LASER_BEAM_PREPARATION
             print(f'⚠️ {tank["name"]} PREPARING LASER BEAM... (1s warning)')
 
-            # Broadcast warning to all players
             socketio.emit('laser_warning', {
                 'player_id': player_id,
                 'player_name': tank['name'],
                 'duration': SKILL_LASER_BEAM_PREPARATION
             })
+
+        elif skill == 'gravity':
+            # Gravity starts with a 1s charge phase (tank frozen)
+            tank['gravity_preparing'] = True
+            tank['gravity_preparation_end'] = current_time + SKILL_GRAVITY_PREPARATION
+            print(f'🌑 {tank["name"]} CHARGING GRAVITY... (1s)')
+
+            socketio.emit('gravity_warning', {
+                'player_id': player_id,
+                'player_name': tank['name'],
+                'duration': SKILL_GRAVITY_PREPARATION
+            })
+
         else:
-            # Other skills activate immediately
-            if skill == 'speed_demon':
-                duration = SKILL_SPEED_DEMON_DURATION
-            else:  # ghost_mode
-                duration = SKILL_GHOST_MODE_DURATION
+            # speed_demon, ghost_mode, transformer — activate immediately
+            skill_durations = {
+                'speed_demon': SKILL_SPEED_DEMON_DURATION,
+                'ghost_mode': SKILL_GHOST_MODE_DURATION,
+                'transformer': SKILL_TRANSFORMER_DURATION,
+            }
+            duration = skill_durations.get(skill, 4)
 
             tank['skill_active'] = True
             tank['skill_end_time'] = current_time + duration
@@ -3049,6 +3229,58 @@ def handle_activate_skill():
                 'skill': skill,
                 'duration': duration
             })
+
+
+def detonate_gravity(player_id: str, tank: dict, current_time: float):
+    """Gravity pulse: clear bullets in radius, damage + freeze nearby players"""
+    cx, cy = tank['x'], tank['y']
+    r = SKILL_GRAVITY_RADIUS
+    r_sq = r * r
+
+    # Remove all bullets within radius
+    global bullets
+    bullets = [b for b in bullets if (b['x'] - cx) ** 2 + (b['y'] - cy) ** 2 >= r_sq]
+
+    # Damage + freeze players in radius (skip self and invincible)
+    hits = []
+    for target_id, target in players.items():
+        if target_id == player_id or not target['alive']:
+            continue
+        dx = target['x'] - cx
+        dy = target['y'] - cy
+        if dx * dx + dy * dy >= r_sq:
+            continue
+
+        is_invincible = (
+            (target['skill_active'] and target['skill'] == 'ghost_mode') or
+            (current_time < target['invincible_until']) or
+            ('invincibility_shield' in target['powerups'])
+        )
+        if is_invincible:
+            continue
+
+        target['health'] = max(0, target['health'] - SKILL_GRAVITY_DAMAGE)
+        target['gravity_frozen_until'] = current_time + SKILL_GRAVITY_FREEZE_DURATION
+
+        if target['health'] <= 0:
+            target['alive'] = False
+            target['respawn_timer'] = RESPAWN_TIME * GAME_TICK_RATE
+            target['deaths'] += 1
+            tank['kills'] += 1
+            tank['score'] += 100
+            socketio.emit('death', {'id': target_id, 'killer': tank['name'], 'killed': target['name']})
+
+        hits.append(target_id)
+
+    print(f'🌑 {tank["name"]} GRAVITY PULSE! r={int(r)}px hit={hits}')
+
+    socketio.emit('gravity_pulse', {
+        'player_id': player_id,
+        'x': cx,
+        'y': cy,
+        'radius': r,
+        'frozen_ids': hits
+    })
 
 
 def detonate_atomic_bomb(player_id: str, tank: dict):

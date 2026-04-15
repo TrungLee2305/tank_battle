@@ -7,8 +7,9 @@ const ctx = canvas.getContext('2d');
 
 // Game constants
 const ARENA_WIDTH = 1440;
-const ARENA_HEIGHT = 840;  // Reduced to fit with header/footer
+const ARENA_HEIGHT = 840;
 const TANK_SIZE = 30;
+const POWERUP_DURATION_CLIENT = 10; // matches server POWERUP_DURATION for timer bar scaling
 
 // Pre-rendered static grid (never changes — drawn once, blit every frame)
 const gridCanvas = document.createElement('canvas');
@@ -28,10 +29,9 @@ gridCanvas.height = ARENA_HEIGHT;
 }());
 
 // ----- Tank class rendering helpers -----
-// 3 tank classes: 'gun' (Laser Beam ult), 'light' (Speed Demon ult), 'armored' (Ghost Mode ult)
-// Each renderer draws a unique body/turret/barrel around (cx, cy) with the given rotation angle and base color.
-// The renderer is used both in-game and for the welcome-screen preview cards.
-const TANK_CLASSES = ['gun', 'light', 'armored'];
+// 5 tank classes. Each has a unique body/turret drawn around (cx, cy).
+// Renderer used both in-game and for welcome-screen preview cards.
+const TANK_CLASSES = ['gun', 'light', 'armored', 'gravity', 'transformer'];
 
 function shadeColor(hex, amount) {
     // amount in [-1, 1]. Positive = lighter, negative = darker.
@@ -50,7 +50,7 @@ function shadeColor(hex, amount) {
     return `rgb(${r}, ${g}, ${b})`;
 }
 
-function drawTankByClass(ctx, cx, cy, angle, color, tankClass, size, treadPhase) {
+function drawTankByClass(ctx, cx, cy, angle, color, tankClass, size, treadPhase, isTransforming) {
     const tankClassSafe = TANK_CLASSES.includes(tankClass) ? tankClass : 'gun';
     const s = size || TANK_SIZE;
     const bodyDark = shadeColor(color, -0.35);
@@ -216,7 +216,7 @@ function drawTankByClass(ctx, cx, cy, angle, color, tankClass, size, treadPhase)
         ctx.lineWidth = 1;
         ctx.strokeRect(turretR * 0.6, -barrelW / 2, barrelLen, barrelW);
 
-    } else {
+    } else if (tankClassSafe === 'armored') {
         // ===== ARMORED TANK =====
         // Wider heavy body, thick treads, bolted plates (rivets), short stubby boxy turret
         const bodyW = s * 1.0;
@@ -289,6 +289,249 @@ function drawTankByClass(ctx, cx, cy, angle, color, tankClass, size, treadPhase)
         ctx.strokeStyle = '#000';
         ctx.lineWidth = 1.5;
         ctx.strokeRect(turretSize * 0.4, -barrelW / 2, barrelLen, barrelW);
+
+    } else if (tankClassSafe === 'gravity') {
+        // ===== GRAVITY TANK =====
+        // Dark spherical body with gravitational rings, no conventional barrel — a singularity emitter
+        const bodyR = s * 0.45;
+        const treadW = s * 1.0;
+        const treadH = s * 0.2;
+
+        // Treads
+        ctx.fillStyle = treadColor;
+        ctx.fillRect(-treadW / 2, -bodyR - treadH * 0.6, treadW, treadH);
+        ctx.fillRect(-treadW / 2, bodyR - treadH * 0.4, treadW, treadH);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(-treadW / 2, -bodyR - treadH * 0.7, treadW, treadH + s * 0.1);
+        ctx.rect(-treadW / 2, bodyR - treadH * 0.5, treadW, treadH + s * 0.1);
+        ctx.clip();
+        ctx.strokeStyle = treadHighlight;
+        ctx.lineWidth = 1;
+        const gStep = treadW / 9;
+        const gOff = ((phase % gStep) + gStep) % gStep;
+        for (let i = -5; i <= 5; i++) {
+            const x = i * gStep + gOff;
+            ctx.beginPath(); ctx.moveTo(x, -bodyR - treadH * 0.6); ctx.lineTo(x, -bodyR + treadH * 0.4); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(x, bodyR - treadH * 0.4); ctx.lineTo(x, bodyR + treadH * 0.6); ctx.stroke();
+        }
+        ctx.restore();
+
+        // Dark sphere body
+        const gBodyGrad = ctx.createRadialGradient(-bodyR * 0.3, -bodyR * 0.3, bodyR * 0.1, 0, 0, bodyR);
+        gBodyGrad.addColorStop(0, shadeColor(color, 0.2));
+        gBodyGrad.addColorStop(0.6, shadeColor(color, -0.5));
+        gBodyGrad.addColorStop(1, '#000000');
+        ctx.fillStyle = gBodyGrad;
+        ctx.beginPath(); ctx.arc(0, 0, bodyR, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#7700ff'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(0, 0, bodyR, 0, Math.PI * 2); ctx.stroke();
+
+        // Gravitational rings (two ellipses at different tilts)
+        ctx.strokeStyle = 'rgba(180, 0, 255, 0.7)'; ctx.lineWidth = 1.5;
+        ctx.save();
+        ctx.scale(1, 0.35);
+        ctx.beginPath(); ctx.arc(0, 0, bodyR * 1.2, 0, Math.PI * 2); ctx.stroke();
+        ctx.restore();
+        ctx.save();
+        ctx.rotate(Math.PI / 3); ctx.scale(1, 0.35);
+        ctx.beginPath(); ctx.arc(0, 0, bodyR * 1.2, 0, Math.PI * 2); ctx.stroke();
+        ctx.restore();
+
+        // Singularity emitter (short dark nozzle pointing forward)
+        const emitLen = s * 0.55;
+        const emitW = s * 0.14;
+        const emitGrad = ctx.createLinearGradient(bodyR, 0, bodyR + emitLen, 0);
+        emitGrad.addColorStop(0, '#9900ff');
+        emitGrad.addColorStop(1, '#220033');
+        ctx.fillStyle = emitGrad;
+        ctx.fillRect(bodyR * 0.7, -emitW / 2, emitLen, emitW);
+        // Glowing tip
+        ctx.fillStyle = 'rgba(200, 0, 255, 0.9)';
+        ctx.beginPath(); ctx.arc(bodyR * 0.7 + emitLen, 0, emitW * 0.6, 0, Math.PI * 2); ctx.fill();
+
+    } else if (tankClassSafe === 'transformer') {
+        // ===== TRANSFORMER =====
+        // Normal tank mode; isTransforming=true draws robot mode
+        const bodyW = s * 0.9;
+        const bodyH = s * 0.8;
+        const treadW = bodyW;
+        const treadH = s * 0.18;
+
+        if (!isTransforming) {
+            // --- VEHICLE MODE ---
+            ctx.fillStyle = treadColor;
+            ctx.fillRect(-treadW / 2, -bodyH / 2 - treadH * 0.5, treadW, treadH);
+            ctx.fillRect(-treadW / 2, bodyH / 2 - treadH * 0.5, treadW, treadH);
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(-treadW / 2, -bodyH / 2 - treadH * 0.6, treadW, treadH + s * 0.09);
+            ctx.rect(-treadW / 2, bodyH / 2 - treadH * 0.6, treadW, treadH + s * 0.09);
+            ctx.clip();
+            ctx.strokeStyle = treadHighlight; ctx.lineWidth = 1;
+            const tStep = treadW / 8;
+            const tOff = ((phase % tStep) + tStep) % tStep;
+            for (let i = -5; i <= 5; i++) {
+                const x = i * tStep + tOff;
+                ctx.beginPath(); ctx.moveTo(x, -bodyH / 2 - treadH * 0.5); ctx.lineTo(x, -bodyH / 2 + treadH * 0.5); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(x, bodyH / 2 - treadH * 0.5); ctx.lineTo(x, bodyH / 2 + treadH * 0.5); ctx.stroke();
+            }
+            ctx.restore();
+
+            // Body — angular red-accented panels
+            const tGrad = ctx.createLinearGradient(0, -bodyH / 2, 0, bodyH / 2);
+            tGrad.addColorStop(0, bodyLight);
+            tGrad.addColorStop(1, bodyDark);
+            ctx.fillStyle = tGrad;
+            ctx.fillRect(-bodyW / 2, -bodyH / 2, bodyW, bodyH);
+            // Red accent stripes
+            ctx.fillStyle = '#cc2200';
+            ctx.fillRect(-bodyW / 2 + s * 0.05, -bodyH / 2 + s * 0.06, bodyW - s * 0.1, s * 0.07);
+            ctx.fillRect(-bodyW / 2 + s * 0.05, bodyH / 2 - s * 0.13, bodyW - s * 0.1, s * 0.07);
+            ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5;
+            ctx.strokeRect(-bodyW / 2, -bodyH / 2, bodyW, bodyH);
+
+            // Turret (hexagonal-ish)
+            const tR = s * 0.28;
+            ctx.fillStyle = shadeColor(color, -0.2);
+            ctx.beginPath();
+            for (let i = 0; i < 6; i++) {
+                const a = (i / 6) * Math.PI * 2 - Math.PI / 6;
+                i === 0 ? ctx.moveTo(Math.cos(a) * tR, Math.sin(a) * tR) : ctx.lineTo(Math.cos(a) * tR, Math.sin(a) * tR);
+            }
+            ctx.closePath(); ctx.fill();
+            ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5; ctx.stroke();
+
+            // Barrel
+            const bLen = s * 0.7; const bW = s * 0.14;
+            ctx.fillStyle = bodyDark;
+            ctx.fillRect(tR * 0.6, -bW / 2, bLen, bW);
+            ctx.strokeStyle = '#000'; ctx.lineWidth = 1;
+            ctx.strokeRect(tR * 0.6, -bW / 2, bLen, bW);
+
+        } else {
+            // --- ROBOT MODE ---
+            // Viewed top-down: robot stands tall, facing right (same as tank forward).
+            // Layout: head at top, wide shoulder plates, compact torso, short legs spread wide.
+            const steel = shadeColor(color, -0.45);
+            const chrome = shadeColor(color, 0.25);
+            const dark = '#0a0a0a';
+
+            // === LEGS (wide stance, angular) ===
+            ctx.fillStyle = steel;
+            // Left leg
+            ctx.beginPath();
+            ctx.moveTo(-s*0.06, s*0.12); ctx.lineTo(-s*0.28, s*0.12);
+            ctx.lineTo(-s*0.32, s*0.48); ctx.lineTo(-s*0.08, s*0.48);
+            ctx.closePath(); ctx.fill();
+            // Right leg
+            ctx.beginPath();
+            ctx.moveTo(s*0.06, s*0.12); ctx.lineTo(s*0.28, s*0.12);
+            ctx.lineTo(s*0.32, s*0.48); ctx.lineTo(s*0.08, s*0.48);
+            ctx.closePath(); ctx.fill();
+            // Knee guards (bright accent)
+            ctx.fillStyle = '#ff3300';
+            ctx.fillRect(-s*0.27, s*0.24, s*0.18, s*0.07);
+            ctx.fillRect(s*0.09, s*0.24, s*0.18, s*0.07);
+            // Feet (flat wide)
+            ctx.fillStyle = dark;
+            ctx.fillRect(-s*0.35, s*0.46, s*0.28, s*0.1);
+            ctx.fillRect(s*0.07, s*0.46, s*0.28, s*0.1);
+
+            // === TORSO ===
+            const tGrad2 = ctx.createLinearGradient(-s*0.3, -s*0.12, s*0.3, s*0.12);
+            tGrad2.addColorStop(0, chrome);
+            tGrad2.addColorStop(0.4, shadeColor(color, -0.1));
+            tGrad2.addColorStop(1, steel);
+            ctx.fillStyle = tGrad2;
+            // Angular torso shape
+            ctx.beginPath();
+            ctx.moveTo(-s*0.3, -s*0.28); ctx.lineTo(s*0.3, -s*0.28);
+            ctx.lineTo(s*0.26, s*0.12);  ctx.lineTo(-s*0.26, s*0.12);
+            ctx.closePath(); ctx.fill();
+            ctx.strokeStyle = dark; ctx.lineWidth = 1.2; ctx.stroke();
+            // Chest panel (glowing orange energy)
+            const chestGrad = ctx.createRadialGradient(0, -s*0.08, 0, 0, -s*0.08, s*0.15);
+            chestGrad.addColorStop(0, '#ffcc00');
+            chestGrad.addColorStop(0.5, '#ff6600');
+            chestGrad.addColorStop(1, '#550000');
+            ctx.fillStyle = chestGrad;
+            ctx.shadowColor = '#ff6600'; ctx.shadowBlur = 12;
+            ctx.beginPath();
+            ctx.moveTo(0, -s*0.22); ctx.lineTo(s*0.12, -s*0.1);
+            ctx.lineTo(0, s*0.02); ctx.lineTo(-s*0.12, -s*0.1);
+            ctx.closePath(); ctx.fill();
+            ctx.shadowBlur = 0;
+            // Vent slits on lower torso
+            ctx.fillStyle = dark;
+            for (let v = 0; v < 3; v++) {
+                ctx.fillRect(-s*0.22, s*0.0 + v * s*0.04, s*0.18, s*0.02);
+                ctx.fillRect(s*0.04, s*0.0 + v * s*0.04, s*0.18, s*0.02);
+            }
+
+            // === SHOULDER PLATES (wide, armoured) ===
+            ctx.fillStyle = shadeColor(color, -0.3);
+            // Left shoulder (trapezoidal)
+            ctx.beginPath();
+            ctx.moveTo(-s*0.3, -s*0.28); ctx.lineTo(-s*0.55, -s*0.22);
+            ctx.lineTo(-s*0.55, -s*0.02); ctx.lineTo(-s*0.3, s*0.0);
+            ctx.closePath(); ctx.fill();
+            ctx.strokeStyle = dark; ctx.lineWidth = 1; ctx.stroke();
+            // Right shoulder
+            ctx.beginPath();
+            ctx.moveTo(s*0.3, -s*0.28); ctx.lineTo(s*0.55, -s*0.22);
+            ctx.lineTo(s*0.55, -s*0.02); ctx.lineTo(s*0.3, s*0.0);
+            ctx.closePath(); ctx.fill();
+            ctx.stroke();
+            // Shoulder rivet accents
+            ctx.fillStyle = '#ff3300';
+            ctx.beginPath(); ctx.arc(-s*0.44, -s*0.12, s*0.04, 0, Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.arc(s*0.44, -s*0.12, s*0.04, 0, Math.PI*2); ctx.fill();
+
+            // === ARMS ===
+            ctx.fillStyle = steel;
+            ctx.fillRect(-s*0.54, -s*0.02, s*0.16, s*0.3);
+            ctx.fillRect(s*0.38, -s*0.02, s*0.16, s*0.3);
+            // Forearm armour plating
+            ctx.fillStyle = shadeColor(color, 0.1);
+            ctx.fillRect(-s*0.53, s*0.08, s*0.14, s*0.14);
+            ctx.fillRect(s*0.39, s*0.08, s*0.14, s*0.14);
+            // Fists (bright glowing energy knuckles, pointing forward = right in local frame)
+            ctx.shadowColor = '#ff8800'; ctx.shadowBlur = 14;
+            ctx.fillStyle = '#ffaa00';
+            ctx.beginPath(); ctx.arc(-s*0.46, s*0.28, s*0.12, 0, Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.arc(s*0.46, s*0.28, s*0.12, 0, Math.PI*2); ctx.fill();
+            // Knuckle detail
+            ctx.fillStyle = '#fff'; ctx.shadowBlur = 0;
+            ctx.beginPath(); ctx.arc(-s*0.46, s*0.28, s*0.04, 0, Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.arc(s*0.46, s*0.28, s*0.04, 0, Math.PI*2); ctx.fill();
+            ctx.shadowBlur = 0;
+
+            // === HEAD ===
+            ctx.fillStyle = shadeColor(color, -0.15);
+            ctx.beginPath();
+            ctx.moveTo(-s*0.18, -s*0.28); ctx.lineTo(s*0.18, -s*0.28);
+            ctx.lineTo(s*0.22, -s*0.56); ctx.lineTo(-s*0.22, -s*0.56);
+            ctx.closePath(); ctx.fill();
+            ctx.strokeStyle = dark; ctx.lineWidth = 1.2; ctx.stroke();
+            // Antenna
+            ctx.strokeStyle = '#aaaaaa'; ctx.lineWidth = 1.5;
+            ctx.beginPath(); ctx.moveTo(0, -s*0.56); ctx.lineTo(0, -s*0.68); ctx.stroke();
+            ctx.fillStyle = '#ff0000';
+            ctx.beginPath(); ctx.arc(0, -s*0.68, s*0.04, 0, Math.PI*2); ctx.fill();
+            // Visor (wide glowing band)
+            const visorGrad = ctx.createLinearGradient(-s*0.18, -s*0.5, s*0.18, -s*0.5);
+            visorGrad.addColorStop(0, 'rgba(0,255,255,0.3)');
+            visorGrad.addColorStop(0.5, '#00ffff');
+            visorGrad.addColorStop(1, 'rgba(0,255,255,0.3)');
+            ctx.fillStyle = visorGrad;
+            ctx.shadowColor = '#00ffff'; ctx.shadowBlur = 10;
+            ctx.fillRect(-s*0.17, -s*0.52, s*0.34, s*0.1);
+            ctx.shadowBlur = 0;
+            // Chin detail
+            ctx.fillStyle = dark;
+            ctx.fillRect(-s*0.1, -s*0.34, s*0.2, s*0.06);
+        }
     }
 
     ctx.restore();
@@ -306,6 +549,64 @@ let gameState = {
     bullets: [],
     terrain: []
 };
+
+// --- Client-side interpolation ---
+// Stores smooth rendered positions for each player, lerped toward server targets each frame.
+// This makes tanks look smooth at any fps even though server only sends 15 updates/sec.
+const renderPos = new Map(); // id -> { x, y, angle }
+
+function getOrCreateRenderPos(player) {
+    if (!renderPos.has(player.id)) {
+        renderPos.set(player.id, { x: player.x, y: player.y, angle: player.angle });
+    }
+    return renderPos.get(player.id);
+}
+
+// Snake interpolation state — lerped each frame toward server target
+let snakeRenderPos = null; // { x, y, direction } or null when no snake
+
+// Called each RAF frame with the elapsed ms since last frame
+function lerpRenderPositions(dt) {
+    const alpha = Math.min(1, dt / (1000 / 30) * 0.85); // 85% of one server tick
+    gameState.players.forEach(player => {
+        const rp = getOrCreateRenderPos(player);
+        if (!player.alive) {
+            rp.x = player.x; rp.y = player.y; rp.angle = player.angle;
+            return;
+        }
+        rp.x += (player.x - rp.x) * alpha;
+        rp.y += (player.y - rp.y) * alpha;
+        // Angle lerp — handle wrap-around (e.g. 359° → 1°)
+        let da = player.angle - rp.angle;
+        if (da > Math.PI) da -= 2 * Math.PI;
+        if (da < -Math.PI) da += 2 * Math.PI;
+        rp.angle += da * alpha;
+    });
+    // Clean up players who left
+    const activeIds = new Set(gameState.players.map(p => p.id));
+    for (const id of renderPos.keys()) {
+        if (!activeIds.has(id)) renderPos.delete(id);
+    }
+
+    // Snake interpolation
+    if (gameState.snake) {
+        const s = gameState.snake;
+        if (!snakeRenderPos) {
+            // First appearance — snap immediately
+            snakeRenderPos = { x: s.x, y: s.y, direction: s.direction };
+        } else {
+            snakeRenderPos.x += (s.x - snakeRenderPos.x) * alpha;
+            snakeRenderPos.y += (s.y - snakeRenderPos.y) * alpha;
+            // Direction lerp with wrap-around
+            let dd = s.direction - snakeRenderPos.direction;
+            if (dd > Math.PI) dd -= 2 * Math.PI;
+            if (dd < -Math.PI) dd += 2 * Math.PI;
+            snakeRenderPos.direction += dd * alpha;
+        }
+    } else {
+        snakeRenderPos = null;
+    }
+}
 
 let lastKilledBy = null;
 
@@ -465,6 +766,25 @@ function spawnDeathExplosion(x, y, color) {
 }
 
 function updateParticles(dtMs) {
+    // Update gravity waves — expand → hold → fade
+    for (let i = gravityWaves.length - 1; i >= 0; i--) {
+        const w = gravityWaves[i];
+        const elapsed = performance.now() - w.createdAt;
+        const total = w.expandMs + w.holdMs + w.fadeMs;
+        if (elapsed >= total) { gravityWaves.splice(i, 1); continue; }
+        if (elapsed < w.expandMs) {
+            w.r = w.maxR * (elapsed / w.expandMs);
+            w.alpha = 1.0;
+        } else if (elapsed < w.expandMs + w.holdMs) {
+            w.r = w.maxR;
+            // Gentle pulse while holding
+            w.alpha = 0.7 + 0.3 * Math.sin((elapsed - w.expandMs) / 300);
+        } else {
+            w.r = w.maxR;
+            w.alpha = 1.0 - (elapsed - w.expandMs - w.holdMs) / w.fadeMs;
+        }
+    }
+
     for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i];
         p.life -= dtMs;
@@ -677,10 +997,13 @@ socket.on('player_left', (data) => {
     showNotification(`${data.name} left the battle`, '#FF6347');
 });
 
+let _lastBulletStateTime = 0; // performance.now() when last bullet data arrived
+
 socket.on('game_state', (data) => {
     const preservedTerrain = gameState.terrain;
     detectPlayerEventsAndUpdatePrev(data.players || []);
     gameState = data;
+    _lastBulletStateTime = performance.now();
     if (!gameState.terrain && preservedTerrain) {
         gameState.terrain = preservedTerrain;
     }
@@ -767,8 +1090,47 @@ socket.on('skill_activated', (data) => {
             skillName = 'GHOST MODE';
             skillIcon = '👻';
             color = '#9370DB';
+        } else if (data.skill === 'transformer') {
+            skillName = 'TRANSFORMER';
+            skillIcon = '🤖';
+            color = '#ff4400';
         }
-        showNotification(`${player.name} activated ${skillName} ${skillIcon}!`, color);
+        if (skillName) showNotification(`${player.name} activated ${skillName} ${skillIcon}!`, color);
+    }
+});
+
+socket.on('gravity_warning', (data) => {
+    showNotification(`🌑 ${data.player_name} is charging GRAVITY PULSE!`, '#aa00ff');
+});
+
+// Gravity pulse wave effect
+const gravityWaves = []; // { x, y, r, maxR, alpha }
+
+socket.on('gravity_pulse', (data) => {
+    showNotification(`🌑 GRAVITY PULSE! Enemies frozen!`, '#aa00ff');
+    gravityWaves.push({
+        x: data.x, y: data.y, r: 0, maxR: data.radius, alpha: 1.0,
+        createdAt: performance.now(),
+        expandMs: 400,   // expand to full radius in 0.4s
+        holdMs: 3000,    // hold at full radius for 3s (= freeze duration)
+        fadeMs: 500      // fade out over 0.5s
+    });
+    // Spawn inward particle vortex
+    for (let i = 0; i < 40; i++) {
+        const angle = (i / 40) * Math.PI * 2;
+        const dist = data.radius * (0.6 + Math.random() * 0.4);
+        const fromX = data.x + Math.cos(angle) * dist;
+        const fromY = data.y + Math.sin(angle) * dist;
+        const life = 500 + Math.random() * 200;
+        particles.push({
+            x: fromX, y: fromY,
+            vx: (data.x - fromX) / 28,
+            vy: (data.y - fromY) / 28,
+            life, maxLife: life,
+            type: 'spark',
+            color: `${130 + Math.floor(Math.random() * 80)}, 0, 255`,
+            size: 3 + Math.random() * 5
+        });
     }
 });
 
@@ -878,7 +1240,7 @@ joinButton.addEventListener('click', () => {
     const selectedColor = (document.querySelector('input[name="tank-color"]:checked') || {}).value || '#32CD32';
     const selectedClass = (document.querySelector('input[name="tank-class"]:checked') || {}).value || 'gun';
     // Tank class determines the ultimate skill (fixed pairing)
-    const classToSkill = { gun: 'laser_beam', light: 'speed_demon', armored: 'ghost_mode' };
+    const classToSkill = { gun: 'laser_beam', light: 'speed_demon', armored: 'ghost_mode', gravity: 'gravity', transformer: 'transformer' };
     const selectedSkill = classToSkill[selectedClass] || 'laser_beam';
     socket.emit('join_game', {
         name: name,
@@ -1177,8 +1539,13 @@ function draw() {
     }
 
     // Draw huge segmented snake if active (3 cells wide × 13 cells long)
-    if (gameState.snake) {
-        const snake = gameState.snake;
+    if (gameState.snake && snakeRenderPos) {
+        // Merge interpolated position/direction with the rest of snake's server data
+        const snake = Object.assign({}, gameState.snake, {
+            x: snakeRenderPos.x,
+            y: snakeRenderPos.y,
+            direction: snakeRenderPos.direction
+        });
         const cellSize = 30; // Same as TANK_SIZE
         const widthCells = 3;
         const lengthCells = 13;
@@ -1560,10 +1927,15 @@ function draw() {
         ctx.restore();
     }
 
-    // Draw bullets
+    // Draw bullets — extrapolate position using vx/vy to smooth between server ticks
+    const _bulletDt = Math.min((performance.now() - _lastBulletStateTime) / (1000 / 30), 2.0); // clamp to 2 ticks max
     gameState.bullets.forEach(bullet => {
         // Different visuals for ricochet bullets
         const hasRicochet = bullet.ricochets_left > 0;
+
+        // Extrapolated render position
+        const bx = bullet.x + bullet.vx * _bulletDt;
+        const by = bullet.y + bullet.vy * _bulletDt;
 
         if (hasRicochet) {
             // Ricochet bullets have a cyan/blue glow
@@ -1578,7 +1950,7 @@ function draw() {
         }
 
         ctx.beginPath();
-        ctx.arc(bullet.x, bullet.y, 6, 0, Math.PI * 2);
+        ctx.arc(bx, by, 6, 0, Math.PI * 2);
         ctx.fill();
 
         // Draw bullet trail
@@ -1589,8 +1961,8 @@ function draw() {
         }
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.moveTo(bullet.x, bullet.y);
-        ctx.lineTo(bullet.x - bullet.vx * 2, bullet.y - bullet.vy * 2);
+        ctx.moveTo(bx, by);
+        ctx.lineTo(bx - bullet.vx * 2, by - bullet.vy * 2);
         ctx.stroke();
 
         // Reset shadow
@@ -1599,19 +1971,34 @@ function draw() {
 
     // Draw tanks
     gameState.players.forEach(player => {
-        // Skip drawing if tank is hidden in bush (except own tank and the captain — always visible)
-        if (player.hidden && player.id !== myPlayerId && !player.is_captain) {
-            return; // Don't draw hidden enemy tanks
+        // Use interpolated render position for smooth 60fps movement
+        const rp = getOrCreateRenderPos(player);
+        // Shadow the server coords with smooth render coords for this draw pass
+        player = Object.assign({}, player, { x: rp.x, y: rp.y, angle: rp.angle });
+
+        // Determine if this player is in the same bush as me
+        const myPlayer_ = gameState.players.find(p => p.id === myPlayerId);
+        const myBushIndex = myPlayer_ ? (myPlayer_.bush_index ?? -1) : -1;
+        const sameBush = player.hidden && myBushIndex >= 0 && player.bush_index === myBushIndex;
+
+        // Skip drawing if hidden — except own tank, captain, bomb carrier, or someone sharing my bush
+        if (player.hidden && player.id !== myPlayerId && !player.is_captain && !player.has_atomic_bomb && !sameBush) {
+            return;
         }
 
         if (!player.alive) {
             ctx.globalAlpha = 0.3;
         } else if (player.hidden && player.id === myPlayerId) {
-            // Show own tank semi-transparent when hidden
+            // Own tank semi-transparent when hidden
             ctx.globalAlpha = 0.7;
         } else if (player.hidden && player.is_captain) {
-            // Captain is always visible but shown semi-transparent to indicate they're in a bush
             ctx.globalAlpha = 0.6;
+        } else if (player.hidden && player.has_atomic_bomb) {
+            // Bomb carrier can't fully hide — semi-visible glow reveals them
+            ctx.globalAlpha = 0.6;
+        } else if (sameBush) {
+            // Teammate/enemy sharing your bush — visible but dimmed
+            ctx.globalAlpha = 0.75;
         }
 
         // Add pulsing glow effect for invincible tanks
@@ -1798,6 +2185,62 @@ function draw() {
             ctx.restore();
         }
 
+        // Atomic bomb carrier targeting effect — always visible, pulsing orange/yellow rings
+        if (player.has_atomic_bomb && player.alive) {
+            ctx.save();
+            const t = now / 180;
+            const pulse = Math.sin(t) * 0.35 + 0.65;
+
+            // Outer orange glow
+            ctx.shadowColor = '#FF8C00';
+            ctx.shadowBlur = 35 * pulse;
+
+            // Rotating orange rings (3 rings)
+            const baseRadius = TANK_SIZE + 10;
+            for (let ring = 0; ring < 3; ring++) {
+                const r = baseRadius + ring * 6 + Math.sin(t + ring * 1.2) * 3;
+                ctx.strokeStyle = `rgba(255, 140, 0, ${pulse * (0.9 - ring * 0.2)})`;
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(player.x, player.y, r, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+
+            // Rotating bracket arcs (4 corners) — counter-clockwise
+            const rot = -t * 0.6;
+            ctx.strokeStyle = `rgba(255, 200, 0, ${pulse})`;
+            ctx.lineWidth = 4;
+            const bracketRadius = baseRadius + 14;
+            for (let i = 0; i < 4; i++) {
+                const start = rot + i * (Math.PI / 2) - 0.35;
+                const end = rot + i * (Math.PI / 2) + 0.35;
+                ctx.beginPath();
+                ctx.arc(player.x, player.y, bracketRadius, start, end);
+                ctx.stroke();
+            }
+
+            // N/S/E/W tick marks
+            ctx.strokeStyle = `rgba(255, 160, 0, ${pulse * 0.9})`;
+            ctx.lineWidth = 2;
+            const tickInner = baseRadius - 4;
+            const tickOuter = baseRadius + 18;
+            for (let i = 0; i < 4; i++) {
+                const a = rot + i * (Math.PI / 2);
+                ctx.beginPath();
+                ctx.moveTo(player.x + Math.cos(a) * tickInner, player.y + Math.sin(a) * tickInner);
+                ctx.lineTo(player.x + Math.cos(a) * tickOuter, player.y + Math.sin(a) * tickOuter);
+                ctx.stroke();
+            }
+
+            // Warning label
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#FF8C00';
+            ctx.font = 'bold 13px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('💣 BOMB CARRIER 💣', player.x, player.y - TANK_SIZE - 40);
+            ctx.restore();
+        }
+
         // Add visual effects for active skills
         if (player.skill_active && player.alive) {
             if (player.skill === 'speed_demon') {
@@ -1860,11 +2303,34 @@ function draw() {
                 ctx.shadowColor = '#9370DB';
                 ctx.shadowBlur = 30 * pulseAlpha;
                 ctx.globalAlpha = 0.6;
+
+            } else if (player.skill === 'transformer') {
+                // Transformer: pulsing orange-red aura
+                const pulseAlpha = Math.sin(now / 120) * 0.4 + 0.6;
+                ctx.shadowColor = '#ff4400';
+                ctx.shadowBlur = 30 * pulseAlpha;
+            } else if (player.skill === 'gravity' && player.gravity_preparing) {
+                // Gravity charging: purple vortex glow
+                const pulseAlpha = Math.sin(now / 80) * 0.5 + 0.5;
+                ctx.shadowColor = '#aa00ff';
+                ctx.shadowBlur = 40 * pulseAlpha;
             }
         }
 
+        // Gravity frozen overlay (ice tint behind tank)
+        if (player.gravity_frozen) {
+            ctx.save();
+            ctx.globalAlpha = 0.45;
+            ctx.fillStyle = '#aaeeff';
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, TANK_SIZE * 0.8, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
+
         // Draw the tank using its class-specific renderer (body, turret, barrel)
-        drawTankByClass(ctx, player.x, player.y, player.angle || 0, player.color, player.tank_class, TANK_SIZE);
+        const isRobotMode = player.tank_class === 'transformer' && player.skill_active && player.skill === 'transformer';
+        drawTankByClass(ctx, player.x, player.y, player.angle || 0, player.color, player.tank_class, TANK_SIZE, undefined, isRobotMode);
 
         // Reset shadow effect
         ctx.shadowBlur = 0;
@@ -1972,53 +2438,108 @@ function draw() {
         // Draw power-up indicators for all active power-ups (stacking)
         if (player.powerups && player.powerups.length > 0) {
             const offsetY = player.id === myPlayerId && player.hidden ? -45 : -35;
-            const iconSpacing = 26; // Space between icons
 
-            // Draw each active power-up icon
-            player.powerups.forEach((powerup, index) => {
-                const xOffset = (index - (player.powerups.length - 1) / 2) * iconSpacing;
+            // Build unique-type display list: {type, count, timeLeft}
+            const timesLeft = player.powerup_times_left || {};
+            const typesMeta = {
+                fast_fire:            { icon: '⚡', bg: 'rgba(255,165,0,0.85)' },
+                fan_shot:             { icon: '✦', bg: 'rgba(138,43,226,0.85)' },
+                speed_boost:          { icon: '➤', bg: 'rgba(0,255,255,0.85)' },
+                invincibility_shield: { icon: '🛡', bg: 'rgba(0,191,255,0.85)' },
+            };
+            // Deduplicated list preserving insertion order
+            const seenTypes = [];
+            player.powerups.forEach(p => { if (!seenTypes.includes(p)) seenTypes.push(p); });
+            const displayItems = seenTypes
+                .filter(t => typesMeta[t])
+                .map(t => ({
+                    type: t,
+                    count: player.powerups.filter(p => p === t).length,
+                    timeLeft: timesLeft[t] || 0,
+                    ...typesMeta[t]
+                }));
 
-                // Power-up icon background and icon
-                let bgColor, powerupIcon;
-                if (powerup === 'fast_fire') {
-                    bgColor = 'rgba(255, 165, 0, 0.8)';
-                    powerupIcon = '⚡';
-                } else if (powerup === 'fan_shot') {
-                    bgColor = 'rgba(138, 43, 226, 0.8)';
-                    powerupIcon = '✦';
-                } else if (powerup === 'speed_boost') {
-                    bgColor = 'rgba(0, 255, 255, 0.8)';
-                    powerupIcon = '➤';
-                } else if (powerup === 'invincibility_shield') {
-                    bgColor = 'rgba(0, 191, 255, 0.8)';
-                    powerupIcon = '🛡';
+            const iconW = 28;
+            const iconH = 18;
+            const iconSpacing = 30;
+            const totalW = displayItems.length * iconSpacing;
+
+            displayItems.forEach((item, index) => {
+                const xOffset = (index - (displayItems.length - 1) / 2) * iconSpacing;
+                const ix = player.x + xOffset;
+                const iy = player.y + offsetY;
+
+                // Background chip
+                ctx.fillStyle = item.bg;
+                ctx.beginPath();
+                if (ctx.roundRect) {
+                    ctx.roundRect(ix - iconW / 2, iy, iconW, iconH, 3);
+                } else {
+                    ctx.rect(ix - iconW / 2, iy, iconW, iconH);
+                }
+                ctx.fill();
+
+                // Timer bar underneath chip
+                if (item.timeLeft > 0) {
+                    const maxDur = item.type === 'invincibility_shield' ? 10 : POWERUP_DURATION_CLIENT;
+                    const pct = Math.min(1, item.timeLeft / maxDur);
+                    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+                    ctx.fillRect(ix - iconW / 2, iy + iconH, iconW, 3);
+                    ctx.fillStyle = item.bg;
+                    ctx.fillRect(ix - iconW / 2, iy + iconH, iconW * pct, 3);
                 }
 
-                ctx.fillStyle = bgColor;
-                ctx.fillRect(player.x + xOffset - 12, player.y + offsetY, 24, 16);
-
-                // Power-up icon
-                ctx.fillStyle = '#FFFFFF';
-                ctx.font = 'bold 12px Arial';
+                // Icon + optional stack count
+                ctx.fillStyle = '#FFF';
+                ctx.font = 'bold 11px Arial';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
-                ctx.fillText(powerupIcon, player.x + xOffset, player.y + offsetY + 8);
-            });
+                const label = item.count > 1 ? `${item.icon}×${item.count}` : item.icon;
+                ctx.fillText(label, ix, iy + iconH / 2);
 
-            // Time remaining (shown once below all icons)
-            if (player.powerup_time_left > 0) {
-                ctx.fillStyle = '#FFFFFF';
-                ctx.font = 'bold 8px Arial';
-                ctx.textAlign = 'center';
-                ctx.fillText(
-                    Math.ceil(player.powerup_time_left) + 's',
-                    player.x,
-                    player.y + offsetY + 20
-                );
-            }
+                // Time left below bar
+                if (item.timeLeft > 0) {
+                    ctx.fillStyle = '#DDD';
+                    ctx.font = '8px Arial';
+                    ctx.fillText(item.timeLeft.toFixed(1) + 's', ix, iy + iconH + 9);
+                }
+            });
         }
 
         ctx.globalAlpha = 1.0;
+    });
+
+    // Draw gravity pulse waves
+    gravityWaves.forEach(w => {
+        if (w.alpha <= 0) return;
+        const elapsed = performance.now() - w.createdAt;
+        const holding = elapsed >= w.expandMs && elapsed < w.expandMs + w.holdMs;
+        ctx.save();
+        // Dim filled zone during hold phase
+        if (holding) {
+            ctx.globalAlpha = w.alpha * 0.06;
+            ctx.fillStyle = '#aa00ff';
+            ctx.beginPath();
+            ctx.arc(w.x, w.y, w.r, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        // Outer ring
+        ctx.globalAlpha = w.alpha * 0.9;
+        ctx.strokeStyle = holding ? '#ff44ff' : '#cc00ff';
+        ctx.lineWidth = holding ? 2 : 3;
+        ctx.shadowColor = '#aa00ff';
+        ctx.shadowBlur = holding ? 12 : 24;
+        ctx.beginPath();
+        ctx.arc(w.x, w.y, w.r, 0, Math.PI * 2);
+        ctx.stroke();
+        // Inner ring
+        ctx.globalAlpha = w.alpha * 0.4;
+        ctx.lineWidth = 1;
+        ctx.shadowBlur = 6;
+        ctx.beginPath();
+        ctx.arc(w.x, w.y, w.r * 0.65, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
     });
 
     drawParticles();
@@ -2061,19 +2582,28 @@ function updateUI() {
             const skillNames = {
                 'speed_demon': 'Speed Demon',
                 'laser_beam': 'Laser Beam',
-                'ghost_mode': 'Ghost Mode'
+                'ghost_mode': 'Ghost Mode',
+                'gravity': 'Gravity Pulse',
+                'transformer': 'Transformer'
             };
             const skillIcons = {
                 'speed_demon': '⚡',
                 'laser_beam': '🔴',
-                'ghost_mode': '👻'
+                'ghost_mode': '👻',
+                'gravity': '🌑',
+                'transformer': '🤖'
             };
 
             skillName.textContent = skillNames[myPlayer.skill] || myPlayer.skill;
             skillIcon.textContent = skillIcons[myPlayer.skill] || '?';
 
             // Update skill progress bar
-            if (myPlayer.skill_active) {
+            if (myPlayer.gravity_preparing) {
+                const timeLeft = Math.ceil(myPlayer.gravity_preparation_time_left);
+                skillProgressFill.className = 'active';
+                skillProgressFill.style.width = '100%';
+                skillProgressText.textContent = `CHARGING... ${timeLeft}s`;
+            } else if (myPlayer.skill_active) {
                 // Skill is currently active
                 const timeLeft = Math.ceil(myPlayer.skill_time_left);
                 skillProgressFill.className = 'active';
@@ -2249,6 +2779,7 @@ function rafLoop(ts) {
     _rafLastTs = ts;
     updateParticles(dt);
     if (myPlayerId !== null) {
+        lerpRenderPositions(dt);
         draw();
     }
     requestAnimationFrame(rafLoop);
