@@ -179,14 +179,14 @@
                         <p id="killed-by">Killed by: Unknown</p>
                         <p id="final-score">Score: 0</p>
                         <p id="final-kd">K/D: 0/0</p>
-                        <div id="spawn-timer-text">Chọn cổng hồi sinh: <span id="spawn-countdown">5</span>s</div>
-                        <small class="spawn-hint">Click vào cổng để chọn vị trí hồi sinh</small>
+                        <div id="spawn-timer-text">Choose spawn: <span id="spawn-countdown">5</span>s</div>
+                        <small class="spawn-hint">Click a gate to choose respawn location</small>
                     </div>
                     <!-- 4 corner spawn gates -->
-                    <button class="spawn-gate" id="gate-tl" data-corner="top_left">🚪<br>↖ Góc Trên-Trái</button>
-                    <button class="spawn-gate" id="gate-tr" data-corner="top_right">🚪<br>Góc Trên-Phải ↗</button>
-                    <button class="spawn-gate" id="gate-bl" data-corner="bottom_left">🚪<br>↙ Góc Dưới-Trái</button>
-                    <button class="spawn-gate" id="gate-br" data-corner="bottom_right">🚪<br>Góc Dưới-Phải ↘</button>
+                    <button class="spawn-gate" id="gate-tl" data-corner="top_left">🚪<br>↖ Top-Left</button>
+                    <button class="spawn-gate" id="gate-tr" data-corner="top_right">🚪<br>Top-Right ↗</button>
+                    <button class="spawn-gate" id="gate-bl" data-corner="bottom_left">🚪<br>↙ Bot-Left</button>
+                    <button class="spawn-gate" id="gate-br" data-corner="bottom_right">🚪<br>Bot-Right ↘</button>
                     <!-- Hidden legacy element (referenced in JS) -->
                     <button id="respawn-button" style="display:none;"></button>
                 </div>
@@ -216,74 +216,60 @@
             </div>
 
             <div id="sidebar">
-                <div class="panel">
-                    <h3>Your Stats</h3>
-                    <div class="stat">
-                        <span class="stat-label">Health:</span>
-                        <div class="health-bar-container">
-                            <div id="my-health-bar" class="health-bar" style="width: 100%"></div>
-                            <span id="my-health-text" class="health-text">100/100</span>
+                <!-- TOP HALF: Stats & Leaderboard -->
+                <div id="stats-section">
+                    <!-- Stats row -->
+                    <div class="panel compact-panel">
+                        <h3>Your Stats</h3>
+                        <div class="health-row">
+                            <span class="stat-label-sm">HP</span>
+                            <div class="health-bar-container">
+                                <div id="my-health-bar" class="health-bar" style="width: 100%"></div>
+                                <span id="my-health-text" class="health-text">100/100</span>
+                            </div>
+                        </div>
+                        <div class="stats-grid">
+                            <div class="stat-cell"><span class="stat-label-sm">Score</span><span id="my-score" class="stat-val">0</span></div>
+                            <div class="stat-cell"><span class="stat-label-sm">Kills</span><span id="my-kills" class="stat-val">0</span></div>
+                            <div class="stat-cell"><span class="stat-label-sm">Deaths</span><span id="my-deaths" class="stat-val">0</span></div>
+                            <div class="stat-cell"><span class="stat-label-sm">Status</span><span id="my-status" class="stat-val">-</span></div>
                         </div>
                     </div>
-                    <div class="stat">
-                        <span class="stat-label">Score:</span>
-                        <span id="my-score" class="stat-value">0</span>
-                    </div>
-                    <div class="stat">
-                        <span class="stat-label">Kills:</span>
-                        <span id="my-kills" class="stat-value">0</span>
-                    </div>
-                    <div class="stat">
-                        <span class="stat-label">Deaths:</span>
-                        <span id="my-deaths" class="stat-value">0</span>
-                    </div>
-                    <div class="stat">
-                        <span class="stat-label">Status:</span>
-                        <span id="my-status" class="stat-value">-</span>
-                    </div>
-                </div>
 
-                <div class="panel" id="skill-panel">
-                    <h3>Ultimate Ability</h3>
-                    <div id="skill-display">
-                        <div id="skill-info">
-                            <span id="skill-name">-</span>
-                            <span id="skill-icon">-</span>
-                        </div>
-                        <div id="skill-status">
+                    <!-- Ultimate + Atomic Bomb side by side -->
+                    <div id="status-row">
+                        <div class="status-mini" id="skill-panel">
+                            <div class="status-mini-title">⚡ Ultimate</div>
+                            <div class="status-mini-name"><span id="skill-icon">-</span> <span id="skill-name">-</span></div>
                             <div id="skill-progress-bar">
                                 <div id="skill-progress-fill"></div>
-                                <span id="skill-progress-text">Press C to activate</span>
+                                <span id="skill-progress-text">Press C</span>
                             </div>
                         </div>
-                        <p id="skill-hint">Press 'C' to activate</p>
-                    </div>
-                </div>
-
-                <div class="panel" id="atomic-bomb-panel" style="display: none;">
-                    <h3>💣 Atomic Bomb</h3>
-                    <div id="bomb-display">
-                        <div id="bomb-status">
-                            <div id="bomb-ready-indicator">
-                                <div class="bomb-icon">☢️</div>
-                                <div id="bomb-status-text">READY TO DETONATE</div>
-                                <div id="bomb-action-text">Press 'X' to activate!</div>
-                            </div>
+                        <div class="status-mini" id="atomic-bomb-panel">
+                            <div class="status-mini-title">💣 Bomb</div>
+                            <div id="bomb-status-text" class="status-mini-state">Not collected</div>
+                            <div id="bomb-action-text" class="status-mini-action">—</div>
                         </div>
-                        <p class="bomb-warning-text">⚠️ Kills all non-invincible players!</p>
+                    </div>
+
+                    <!-- Leaderboard top 5 -->
+                    <div class="panel compact-panel">
+                        <h3>Top 5 <span id="players-count" style="font-size:10px;font-weight:normal;color:#aaa;text-transform:none;letter-spacing:0;"></span></h3>
+                        <div id="leaderboard">
+                            <p class="no-players">No players yet</p>
+                        </div>
                     </div>
                 </div>
 
-                <div class="panel">
-                    <h3>Leaderboard</h3>
-                    <div id="leaderboard">
-                        <p class="no-players">No players yet</p>
+                <!-- BOTTOM HALF: Chat -->
+                <div id="chat-section">
+                    <div class="chat-header">💬 Chat</div>
+                    <div id="chat-messages"></div>
+                    <div id="chat-input-area">
+                        <input type="text" id="chat-input" placeholder="Type a message..." maxlength="80" autocomplete="off">
+                        <button id="chat-send">▶</button>
                     </div>
-                </div>
-
-                <div class="panel">
-                    <h3>Players Online</h3>
-                    <div id="players-count">0 players</div>
                 </div>
             </div>
         </div>

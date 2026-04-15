@@ -3000,6 +3000,7 @@ def handle_disconnect():
                 print(f'✓ Player disconnected: {player_name} ({player_id}) from {client_ip}')
                 del players[player_id]
                 socketio.emit('player_left', {'id': player_id, 'name': player_name})
+                socketio.emit('chat_system', {'text': f'🚪 {player_name} đã rời trận.'})
 
                 # Check if we need to spawn bots after this disconnect
                 # (will be handled in next game loop tick)
@@ -3087,6 +3088,7 @@ def handle_join_game(data):
             'color': players[player_id]['color'],
             'team': player_team
         })
+        socketio.emit('chat_system', {'text': f'⚔️ {player_name} đã vào trận!'})
     except Exception as e:
         print(f'✗ Error joining game: {e}')
 
@@ -3374,6 +3376,23 @@ def detonate_atomic_bomb(player_id: str, tank: dict):
         'player_name': tank['name'],
         'kills': kills_count,
         'victims': victims
+    })
+
+
+@socketio.on('chat_message')
+def handle_chat_message(data):
+    """Broadcast chat message to all players."""
+    player_id = request.sid
+    if player_id not in players:
+        return
+    text = (data.get('text') or '').strip()[:120]
+    if not text:
+        return
+    tank = players[player_id]
+    socketio.emit('chat_message', {
+        'name': tank['name'],
+        'text': text,
+        'color': tank.get('color', '#FFD700'),
     })
 
 

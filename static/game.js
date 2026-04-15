@@ -1032,6 +1032,54 @@ socket.on('respawned', (data) => {
     }
 });
 
+// ===== Chat =====
+const chatMessages = document.getElementById('chat-messages');
+const chatInput = document.getElementById('chat-input');
+const chatSend = document.getElementById('chat-send');
+
+function appendChatMsg(name, text, color, isSystem) {
+    const div = document.createElement('div');
+    div.className = 'chat-msg' + (isSystem ? ' system' : '');
+    if (isSystem) {
+        div.textContent = text;
+    } else {
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'chat-name';
+        nameSpan.style.color = color || '#FFD700';
+        nameSpan.textContent = name + ':';
+        div.appendChild(nameSpan);
+        div.appendChild(document.createTextNode(' ' + text));
+    }
+    chatMessages.appendChild(div);
+    // Keep last 80 messages
+    while (chatMessages.children.length > 80) chatMessages.removeChild(chatMessages.firstChild);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function sendChat() {
+    const text = chatInput.value.trim();
+    if (!text) return;
+    socket.emit('chat_message', { text });
+    chatInput.value = '';
+}
+
+chatSend.addEventListener('click', sendChat);
+chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); sendChat(); }
+    // Prevent game keys from firing while typing in chat
+    e.stopPropagation();
+});
+chatInput.addEventListener('keyup', (e) => e.stopPropagation());
+
+socket.on('chat_message', (data) => {
+    appendChatMsg(data.name, data.text, data.color, false);
+});
+
+socket.on('chat_system', (data) => {
+    appendChatMsg('', data.text, '', true);
+});
+// ===== End Chat =====
+
 socket.on('tank_destroyed', (data) => {
     if (data.victim_id === myPlayerId) {
         lastKilledBy = data.killer_name;
@@ -2565,7 +2613,7 @@ function draw() {
 function updateUI() {
     // Update player count
     const aliveCount = gameState.players.filter(p => p.alive).length;
-    playersCount.textContent = `${gameState.players.length} player${gameState.players.length !== 1 ? 's' : ''} (${aliveCount} alive)`;
+    playersCount.textContent = `(${gameState.players.length}p · ${aliveCount} alive)`;
 
     // Find my player
     const myPlayer = gameState.players.find(p => p.id === myPlayerId);
@@ -2576,7 +2624,7 @@ function updateUI() {
         myKills.textContent = myPlayer.kills;
         myDeaths.textContent = myPlayer.deaths;
         myStatus.textContent = myPlayer.alive ? 'Alive' : 'Dead';
-        myStatus.className = 'stat-value ' + (myPlayer.alive ? 'alive' : 'dead');
+        myStatus.className = 'stat-val ' + (myPlayer.alive ? 'alive' : 'dead');
 
         // Update health bar
         const healthPercent = (myPlayer.health / myPlayer.max_health) * 100;
@@ -2638,29 +2686,32 @@ function updateUI() {
             }
         }
 
-        // Update atomic bomb panel visibility and status
-        if (myPlayer.has_atomic_bomb || myPlayer.bomb_preparing || myPlayer.bomb_freezing) {
-            atomicBombPanel.style.display = 'block';
-
-            if (myPlayer.bomb_preparing) {
-                // Show countdown during preparation
-                const timeLeft = Math.ceil(myPlayer.bomb_preparation_time_left);
-                bombStatusText.textContent = `ARMING: ${timeLeft}s`;
-                bombActionText.textContent = '⚠️ STAND CLEAR! ⚠️';
-                bombActionText.style.animation = 'blink 0.2s infinite';
-            } else if (myPlayer.bomb_freezing) {
-                // Show exhausted state
-                bombStatusText.textContent = 'EXHAUSTED';
-                bombActionText.textContent = '❄️ Recovering... ❄️';
-                bombActionText.style.animation = 'none';
-            } else {
-                // Ready to activate
-                bombStatusText.textContent = 'READY TO DETONATE';
-                bombActionText.textContent = "Press 'X' to activate!";
-                bombActionText.style.animation = 'blink 0.5s infinite';
-            }
+        // Update atomic bomb status (always visible)
+        if (myPlayer.bomb_preparing) {
+            const timeLeft = Math.ceil(myPlayer.bomb_preparation_time_left);
+            bombStatusText.textContent = `ARMING: ${timeLeft}s`;
+            bombStatusText.style.color = '#FF4400';
+            bombActionText.textContent = '⚠️ STAND CLEAR!';
+            bombActionText.style.color = '#FF4400';
+            bombActionText.style.animation = 'blink 0.2s infinite';
+        } else if (myPlayer.bomb_freezing) {
+            bombStatusText.textContent = 'EXHAUSTED';
+            bombStatusText.style.color = '#888';
+            bombActionText.textContent = '❄️ Recovering...';
+            bombActionText.style.color = '#888';
+            bombActionText.style.animation = 'none';
+        } else if (myPlayer.has_atomic_bomb) {
+            bombStatusText.textContent = 'READY';
+            bombStatusText.style.color = '#FFD700';
+            bombActionText.textContent = "Press 'X' to detonate";
+            bombActionText.style.color = '#FF6600';
+            bombActionText.style.animation = 'blink 0.5s infinite';
         } else {
-            atomicBombPanel.style.display = 'none';
+            bombStatusText.textContent = 'Not collected';
+            bombStatusText.style.color = '#555';
+            bombActionText.textContent = '—';
+            bombActionText.style.color = '#444';
+            bombActionText.style.animation = 'none';
         }
 
         // Show death screen with spawn selection
@@ -2695,8 +2746,8 @@ function updateUI() {
         `;
 
         // Separate players by team
-        const redPlayers = gameState.players.filter(p => p.team === 'red').sort((a, b) => b.score - a.score);
-        const bluePlayers = gameState.players.filter(p => p.team === 'blue').sort((a, b) => b.score - a.score);
+        const redPlayers = gameState.players.filter(p => p.team === 'red').sort((a, b) => b.score - a.score).slice(0, 3);
+        const bluePlayers = gameState.players.filter(p => p.team === 'blue').sort((a, b) => b.score - a.score).slice(0, 3);
 
         // Show Red Team players
         if (redPlayers.length > 0) {
@@ -2733,7 +2784,7 @@ function updateUI() {
         // FFA mode: Regular leaderboard
         const sortedPlayers = [...gameState.players]
             .sort((a, b) => b.score - a.score)
-            .slice(0, 10);
+            .slice(0, 5);
 
         if (sortedPlayers.length === 0) {
             leaderboard.innerHTML = '<p class="no-players">No players yet</p>';
