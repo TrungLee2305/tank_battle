@@ -140,7 +140,7 @@ FAST_FIRE_COOLDOWN = 3  # ticks (0.1s at 30 ticks/sec = 10 shots/sec)
 FAN_SHOT_BULLETS = 3  # Number of bullets in fan shot
 FAN_SHOT_SPREAD = 0.4  # Radians spread for fan shot
 SPEED_BOOST_MULTIPLIER = 2.0  # 100% increase = 2x speed
-SUPER_DROP_INTERVAL = 60  # seconds between super drops
+SUPER_DROP_INTERVAL = 20  # seconds between super drops
 SUPER_POWERUP_DURATION = 6  # seconds super power-up lasts
 
 # Snake constants
@@ -157,7 +157,7 @@ SHIELD_DROP_INTERVAL = 10  # seconds between shield drops
 SHIELD_DURATION = 6  # seconds shield lasts
 
 # Atomic Bomb constants
-ATOMIC_BOMB_RESPAWN_DELAY = 5  # seconds after world becomes bomb-free before spawning new one
+ATOMIC_BOMB_RESPAWN_DELAY = 20  # seconds after world becomes bomb-free before spawning new one
 ATOMIC_BOMB_SIZE = 40  # Size of atomic bomb visual
 ATOMIC_BOMB_PREPARATION = 3.0  # seconds preparation phase (warning, frozen in place)
 ATOMIC_BOMB_FREEZE = 2.0  # seconds post-detonation frozen phase
@@ -1273,8 +1273,8 @@ def drop_atomic_bomb_at(x: float, y: float):
     """Drop atomic bomb at carrier's death position so others can pick it up"""
     global atomic_bomb
     # Clamp to safe area away from edges
-    bx = max(40, min(WORLD_WIDTH - 40, x))
-    by = max(40, min(WORLD_HEIGHT - 40, y))
+    bx = max(40, min(ARENA_WIDTH - 40, x))
+    by = max(40, min(ARENA_HEIGHT - 40, y))
     atomic_bomb = {'x': bx, 'y': by, 'size': ATOMIC_BOMB_SIZE}
     print(f'💣 ATOMIC BOMB dropped at ({int(bx)}, {int(by)})!')
     socketio.emit('atomic_bomb_spawned', {'x': bx, 'y': by})
@@ -1919,6 +1919,7 @@ def create_tank(player_id: str, name: str, color: str = None, skill: str = None,
         # Emoji display (Press T to open picker client-side, T again to send)
         'emoji': None,              # Currently displayed emoji (None if not showing)
         'emoji_end_time': 0,        # Unix time when the displayed emoji expires
+        'chosen_spawn': None,  # Corner chosen for next respawn (top_left/top_right/bottom_left/bottom_right)
         'keys': {
             'w': False,
             'a': False,
@@ -1995,6 +1996,7 @@ def create_bot(bot_name: str, team: str = None) -> tuple:
         'is_captain': False,  # Whether this bot is the current captain
         'captain_targeted_until': 0,  # Unix time until the "hunt the captain" effect expires
         'team': team,  # Team assignment for Duel mode
+        'chosen_spawn': None,  # Bots auto-spawn, never set
         'emoji': None,
         'emoji_end_time': 0,
         'keys': {
@@ -2822,6 +2824,7 @@ def game_loop():
                             old_kills = tank['kills']
                             old_deaths = tank['deaths']
                             old_skill_cooldown_end = tank['skill_cooldown_end']
+                            old_chosen_spawn = tank.get('chosen_spawn')
                             is_bot = tank.get('is_bot', False)
 
                             # Preserve team in Duel mode
@@ -2845,6 +2848,15 @@ def game_loop():
                                 new_tank['kills'] = old_kills
                                 new_tank['deaths'] = old_deaths
                                 new_tank['skill_cooldown_end'] = old_skill_cooldown_end  # Preserve cooldown
+                                # Apply chosen spawn corner if player selected one
+                                _corner_positions = {
+                                    'top_left':     (80, 80),
+                                    'top_right':    (ARENA_WIDTH - 80, 80),
+                                    'bottom_left':  (80, ARENA_HEIGHT - 80),
+                                    'bottom_right': (ARENA_WIDTH - 80, ARENA_HEIGHT - 80),
+                                }
+                                if old_chosen_spawn in _corner_positions:
+                                    new_tank['x'], new_tank['y'] = _corner_positions[old_chosen_spawn]
                                 players[player_id] = new_tank
 
                             socketio.emit('respawned', {
@@ -3363,6 +3375,19 @@ def detonate_atomic_bomb(player_id: str, tank: dict):
         'kills': kills_count,
         'victims': victims
     })
+
+
+@socketio.on('choose_spawn')
+def handle_choose_spawn(data):
+    """Player selects a corner spawn gate while waiting to respawn."""
+    player_id = request.sid
+    corner = data.get('corner') if data else None
+    valid_corners = {'top_left', 'top_right', 'bottom_left', 'bottom_right'}
+    if player_id in players and corner in valid_corners:
+        tank = players[player_id]
+        if not tank['alive']:
+            tank['chosen_spawn'] = corner
+            print(f'🚪 {tank["name"]} chose spawn: {corner}')
 
 
 @socketio.on('show_emoji')

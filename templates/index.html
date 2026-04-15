@@ -172,14 +172,23 @@
                     </div>
                 </div>
 
-                <div id="death-screen" class="overlay" style="display: none;">
-                    <div class="modal">
-                        <h2>You Were Destroyed!</h2>
+                <div id="death-screen" class="death-overlay" style="display: none;">
+                    <!-- Center info panel -->
+                    <div id="death-info-panel">
+                        <h2>💀 You Were Destroyed!</h2>
                         <p id="killed-by">Killed by: Unknown</p>
                         <p id="final-score">Score: 0</p>
                         <p id="final-kd">K/D: 0/0</p>
-                        <button id="respawn-button" class="btn-primary">Respawn</button>
+                        <div id="spawn-timer-text">Chọn cổng hồi sinh: <span id="spawn-countdown">5</span>s</div>
+                        <small class="spawn-hint">Click vào cổng để chọn vị trí hồi sinh</small>
                     </div>
+                    <!-- 4 corner spawn gates -->
+                    <button class="spawn-gate" id="gate-tl" data-corner="top_left">🚪<br>↖ Góc Trên-Trái</button>
+                    <button class="spawn-gate" id="gate-tr" data-corner="top_right">🚪<br>Góc Trên-Phải ↗</button>
+                    <button class="spawn-gate" id="gate-bl" data-corner="bottom_left">🚪<br>↙ Góc Dưới-Trái</button>
+                    <button class="spawn-gate" id="gate-br" data-corner="bottom_right">🚪<br>Góc Dưới-Phải ↘</button>
+                    <!-- Hidden legacy element (referenced in JS) -->
+                    <button id="respawn-button" style="display:none;"></button>
                 </div>
 
                 <div id="game-over-screen" class="overlay" style="display: none;">

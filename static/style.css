@@ -262,6 +262,100 @@ body {
     margin: 0;
 }
 
+/* Death screen — transparent spawn selection overlay */
+.death-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.38);
+    z-index: 100;
+    pointer-events: all;
+}
+
+#death-info-panel {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(12, 12, 12, 0.88);
+    border: 2px solid #FFD700;
+    border-radius: 12px;
+    padding: 14px 22px;
+    text-align: center;
+    pointer-events: none;
+    min-width: 210px;
+    z-index: 101;
+}
+
+#death-info-panel h2 {
+    color: #FF4444;
+    font-size: 17px;
+    margin: 0 0 6px 0;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+#death-info-panel p {
+    color: #ccc;
+    font-size: 12px;
+    margin: 3px 0;
+}
+
+#spawn-timer-text {
+    color: #FFD700;
+    font-size: 15px;
+    font-weight: bold;
+    margin-top: 8px;
+}
+
+#spawn-countdown {
+    color: #FF6600;
+    font-size: 18px;
+}
+
+.spawn-hint {
+    display: block;
+    color: #888;
+    font-size: 10px;
+    margin-top: 5px;
+}
+
+.spawn-gate {
+    position: absolute;
+    width: 120px;
+    height: 80px;
+    background: rgba(0, 45, 0, 0.85);
+    border: 3px solid #00CC00;
+    border-radius: 10px;
+    color: #00FF00;
+    font-size: 12px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    line-height: 1.5;
+}
+
+.spawn-gate:hover {
+    background: rgba(0, 100, 0, 0.92);
+    box-shadow: 0 0 22px rgba(0, 255, 0, 0.65);
+    transform: scale(1.07);
+}
+
+.spawn-gate.selected {
+    background: rgba(0, 150, 0, 0.95);
+    border-color: #FFFF00;
+    color: #FFFF00;
+    box-shadow: 0 0 30px rgba(255, 255, 0, 0.75);
+    transform: scale(1.1);
+}
+
+#gate-tl { top: 12px; left: 12px; }
+#gate-tr { top: 12px; right: 12px; }
+#gate-bl { bottom: 12px; left: 12px; }
+#gate-br { bottom: 12px; right: 12px; }
+
 /* Overlays */
 .overlay {
     position: absolute;

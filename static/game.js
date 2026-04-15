@@ -959,6 +959,18 @@ const atomicBombPanel = document.getElementById('atomic-bomb-panel');
 const bombStatusText = document.getElementById('bomb-status-text');
 const bombActionText = document.getElementById('bomb-action-text');
 
+// Spawn gate selection
+let selectedSpawnCorner = null;
+document.querySelectorAll('.spawn-gate').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const corner = btn.dataset.corner;
+        selectedSpawnCorner = corner;
+        document.querySelectorAll('.spawn-gate').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        socket.emit('choose_spawn', { corner });
+    });
+});
+
 // Socket event handlers
 socket.on('connect', () => {
     console.log('Connected to server');
@@ -1015,6 +1027,8 @@ socket.on('respawned', (data) => {
     console.log('Respawned:', data);
     if (data.id === myPlayerId) {
         deathScreen.style.display = 'none';
+        selectedSpawnCorner = null;
+        document.querySelectorAll('.spawn-gate').forEach(b => b.classList.remove('selected'));
     }
 });
 
@@ -2649,23 +2663,19 @@ function updateUI() {
             atomicBombPanel.style.display = 'none';
         }
 
-        // Show death screen with respawn timer
+        // Show death screen with spawn selection
         if (!myPlayer.alive) {
             if (deathScreen.style.display === 'none') {
                 finalScore.textContent = `Score: ${myPlayer.score}`;
                 finalKD.textContent = `K/D: ${myPlayer.kills}/${myPlayer.deaths}`;
                 killedBy.textContent = lastKilledBy ? `Killed by: ${lastKilledBy}` : 'Destroyed!';
-                deathScreen.style.display = 'flex';
+                deathScreen.style.display = 'block';
+                selectedSpawnCorner = null;
+                document.querySelectorAll('.spawn-gate').forEach(btn => btn.classList.remove('selected'));
             }
-
-            // Update respawn button with timer
-            if (myPlayer.respawn_timer > 0) {
-                respawnButton.textContent = `Respawning in ${myPlayer.respawn_timer}s...`;
-                respawnButton.disabled = true;
-            } else {
-                respawnButton.textContent = 'Respawn';
-                respawnButton.disabled = false;
-            }
+            // Update countdown
+            const countdown = document.getElementById('spawn-countdown');
+            if (countdown) countdown.textContent = myPlayer.respawn_timer > 0 ? myPlayer.respawn_timer : '...';
         }
     }
 
