@@ -7,7 +7,7 @@
 4. [Core Systems](#core-systems)
 5. [Game Mechanics](#game-mechanics)
 6. [Features Reference](#features-reference)
-7. [Code Locations](#code-locations)
+7. [Constants Reference](#constants-reference)
 8. [How to Add/Modify Features](#how-to-addmodify-features)
 9. [Troubleshooting](#troubleshooting)
 
@@ -21,12 +21,13 @@
 - **Backend**: Python 3.x + Flask + Flask-SocketIO + Gevent
 - **Frontend**: Vanilla JavaScript + HTML5 Canvas + Socket.IO Client
 - **Real-time Communication**: WebSocket (Socket.IO)
-- **Game Loop**: Server-authoritative at 30 ticks/second
+- **Game Loop**: Server-authoritative at 30 ticks/second; state broadcast at 15 Hz (every 2nd tick)
 
 ### Key Concepts
-- **Server-Authoritative**: All game logic runs on server, clients only render
-- **Real-time Updates**: Game state broadcast 30 times per second
+- **Server-Authoritative**: All game logic runs on server; clients only render
+- **Client Interpolation**: `renderPos` / `snakeRenderPos` maps lerp positions each RAF frame for smooth motion
 - **Event-Driven**: Player actions (move, shoot, activate skill) sent via Socket.IO events
+- **Tank Classes**: Skill is fixed per tank class — selected at join, not mid-game
 
 ---
 
@@ -36,9 +37,10 @@
 ┌─────────────────────────────────────────────────────────────┐
 │                         CLIENT SIDE                          │
 ├─────────────────────────────────────────────────────────────┤
-│  game.js: Handles rendering, input capture, UI updates      │
+│  game.js: Input capture, rendering, UI updates              │
 │  Socket.IO Client: Sends player actions to server           │
-│  HTML5 Canvas: Renders game at 60 FPS                       │
+│  HTML5 Canvas: Renders at monitor refresh rate (RAF loop)   │
+│  Lerp system: renderPos / snakeRenderPos for smooth motion  │
 └─────────────────────────────────────────────────────────────┘
                               ▲ │
                               │ │ WebSocket (Socket.IO)
@@ -46,28 +48,21 @@
 ┌─────────────────────────────────────────────────────────────┐
 │                         SERVER SIDE                          │
 ├─────────────────────────────────────────────────────────────┤
-│  tank_server.py: Main game server                           │
-│  ├─ Game Loop (30 ticks/sec): Updates all entities          │
-│  ├─ Socket.IO Events: Handles player actions                │
+│  tank_server.py: Main game server (~3400 lines)             │
+│  ├─ Game Loop (30 ticks/sec): updates all entities          │
+│  ├─ Broadcast (15 Hz): game_state every 2nd tick            │
+│  ├─ Socket.IO Events: handles player actions                │
 │  ├─ Game State: players, bullets, terrain, power-ups        │
-│  └─ Collision Detection: AABB, point-to-line algorithms     │
-└─────────────────────────────────────────────────────────────┘
-                              │ │
-                              │ ▼
-┌─────────────────────────────────────────────────────────────┐
-│                       CLIENT RENDERING                       │
-├─────────────────────────────────────────────────────────────┤
-│  Receives game_state every 33ms (30 FPS)                    │
-│  Draws: tanks, bullets, terrain, power-ups, snake, UI       │
+│  └─ Collision Detection: AABB + penetration-depth push-out  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### Data Flow
-1. **Player Input** → Client captures (WASD, mouse, click, C key)
-2. **Send to Server** → Socket.IO events (`key_state`, `rotate`, `shoot`, `activate_skill`)
-3. **Server Updates** → Game loop processes all entities
-4. **Broadcast State** → `game_state` event sent to all clients
-5. **Client Renders** → Canvas draws the current frame
+1. **Player Input** → Client captures (WASD, mouse, click, C/X/T keys)
+2. **Send to Server** → `key_state`, `rotate`, `shoot`, `activate_skill`, `activate_atomic_bomb`
+3. **Server Updates** → 30 Hz game loop processes all entities
+4. **Broadcast State** → `game_state` sent to all clients at 15 Hz
+5. **Client Renders** → RAF loop lerps positions and draws current frame
 
 ---
 
@@ -75,176 +70,236 @@
 
 ```
 tank_battle/
-├── tank_server.py          # Main game server (1822 lines)
-│   ├── Constants (lines 60-126)
-│   ├── Terrain Generation (lines 154-413)
-│   ├── Power-ups (lines 476-787)
-│   ├── Snake System (lines 563-686)
-│   ├── Skills System (lines 806-973)
-│   ├── Bot AI (lines 922-1091)
-│   ├── Game Loop (lines 1342-1594)
-│   └── Socket.IO Handlers (lines 1605-1793)
+├── tank_server.py          # Main game server (~3400 lines)
+│   ├── Constants          (~line 67)
+│   ├── Terrain Generation (~line 400)
+│   ├── Power-up Spawning  (~line 1200)
+│   ├── Captain System     (~line 1270)
+│   ├── Skills System      (~line 1436)
+│   ├── Tank Creation      (~line 1870)
+│   ├── Bot AI             (~line 2000)
+│   ├── Tank Movement      (~line 2154)
+│   ├── Game Loop          (~line 2648)
+│   └── Socket.IO Handlers (~line 3100)
 │
 ├── static/
-│   ├── game.js             # Client-side game logic (1050 lines)
-│   │   ├── Socket.IO setup (lines 1-51)
-│   │   ├── Input handling (lines 178-260)
-│   │   ├── Rendering (lines 261-900)
-│   │   └── UI updates (lines 909-1025)
-│   └── style.css           # Game styling (800+ lines)
+│   ├── game.js             # Client-side game logic (~2700 lines)
+│   │   ├── Tank renderers  (drawTankByClass, lines 53–450)
+│   │   ├── Socket events   (~line 962)
+│   │   ├── Input handling  (~line 1310)
+│   │   ├── RAF render loop (~line 1480)
+│   │   └── UI updates      (~line 2550)
+│   └── style.css           # Game styling
 │
 ├── templates/
-│   └── index.html          # Main game page (236 lines)
-│       ├── Welcome screen (lines 20-153)
-│       ├── Death screen (lines 156-164)
-│       ├── Game canvas (line 18)
-│       └── Sidebar UI (lines 169-224)
+│   └── index.html          # Main game page (~290 lines)
+│       ├── Welcome screen  (tank class + color + mode + map selection)
+│       ├── Death screen
+│       ├── Game-over screen (Duel mode)
+│       ├── Game canvas (1440×840)
+│       └── Sidebar UI (stats, skill panel, bomb panel, leaderboard)
 │
 ├── README_DEVELOPER.md     # This file
-├── TEST_LASER_SNAKE.md     # Testing guide for laser beam
-└── FIXES_SUMMARY.md        # Version 2.1 changes log
 ```
 
 ---
 
 ## Core Systems
 
-### 1. Game Loop (tank_server.py:1342-1594)
+### 1. Game Loop (tank_server.py ~line 2648)
 
-**Runs at 30 ticks per second**
+**30 ticks/sec; broadcasts every 2nd tick (15 Hz)**
 
 ```python
 def game_loop():
     while game_running:
-        # 1. Check bot spawning/removal
-        check_and_manage_bots()
+        # 1. Update active skills & cooldowns
+        update_skills(current_time)
 
-        # 2. Update all tanks
+        # 2. Update snake movement
+        update_snake()
+
+        # 3. Update all tanks
         for tank in players.values():
             if tank.get('is_bot'):
-                update_bot_ai(tank)      # Bot AI
-            update_tank_movement(tank)    # Physics
-            check_supply_drop_collection(tank)  # Power-ups
-            check_shield_collection(tank)
-            check_snake_collision(tank)   # Snake instant death
+                update_bot_ai(tank)
+            update_tank_movement(tank, current_time)
+            check_supply_drop_collection(tank, current_time)
+            check_shield_collection(tank, current_time)
+            check_atomic_bomb_collection(tank)
+            check_snake_collision(tank)
 
-        # 3. Update bullets
-        update_bullets()  # Move, collide with walls/tanks/snake
+        # 4. Update bullets (move + collide)
+        update_bullets(current_time)
 
-        # 4. Update power-ups and skills
-        update_powerups()  # Expire timers
-        update_skills()    # Handle laser beam, skill durations
-
-        # 5. Update snake
-        update_snake()  # Move snake, check if off-screen
+        # 5. Expire power-up timers (per-type)
+        update_powerups(current_time)
 
         # 6. Spawn new items
-        if time_for_supply_drops:
-            spawn_supply_drops()
-        if time_for_snake:
-            spawn_snake()
+        spawn_supply_drops / spawn_snake / spawn_shield_drop
+        # Atomic bomb: spawn 5s after world becomes bomb-free
 
-        # 7. Broadcast game state to all clients
-        socketio.emit('game_state', game_state)
+        # 7. Broadcast (every 2nd tick)
+        if tick_count % 2 == 0:
+            socketio.emit('game_state', game_state)
 
-        # 8. Sleep to maintain 30 FPS
-        gevent.sleep(1.0 / 30)
+        gevent.sleep(1.0 / GAME_TICK_RATE)
 ```
 
-### 2. Collision Detection
+### 2. Tank Object Structure
 
-**AABB (Axis-Aligned Bounding Box)**
-Used for: tanks vs walls, bullets vs walls, bullets vs tanks
+```python
+tank = {
+    # Identity
+    'id': 'unique_id',
+    'name': 'PlayerName',
+    'color': '#32CD32',
+    'is_bot': False,
+
+    # Position & movement
+    'x': 720, 'y': 420,
+    'angle': 0.0,
+    'vx': 0, 'vy': 0,
+    'keys': {'w': False, 'a': False, 's': False, 'd': False},
+
+    # Health & scoring
+    'health': 100, 'max_health': 100,
+    'alive': True,
+    'score': 0, 'kills': 0, 'deaths': 0,
+    'shoot_cooldown': 0,
+    'respawn_timer': 0,
+
+    # Tank class & skill (fixed pairing)
+    'tank_class': 'gun',           # 'gun'|'light'|'armored'|'gravity'|'transformer'
+    'skill': 'laser_beam',         # determined by tank_class at join
+    'skill_active': False,
+    'skill_end_time': 0,
+    'skill_cooldown_end': 0,
+
+    # Power-ups (per-type independent timers)
+    'powerups': [],                # active types list
+    'powerup_end_times': {},       # {type: end_timestamp}
+
+    # Spawn protection
+    'invincible_until': 0,
+
+    # Bush / visibility
+    'hidden': False,
+    'bush_index': -1,              # index of bush player is inside (-1 = none)
+
+    # Atomic bomb
+    'has_atomic_bomb': False,
+    'bomb_preparing': False,
+    'bomb_preparation_end': 0,
+    'bomb_freezing': False,
+    'bomb_freeze_end': 0,
+
+    # Captain system
+    'is_captain': False,
+    'captain_targeted_until': 0,
+
+    # Skill-specific states
+    # Laser
+    'laser_preparing': False,
+    'laser_preparation_end': 0,
+    'laser_cooling_down': False,
+    'laser_cooldown_end': 0,
+    # Gravity
+    'gravity_preparing': False,
+    'gravity_preparation_end': 0,
+    'gravity_frozen_until': 0,
+    # Transformer
+    'transformer_damage_targets': {},  # {player_id: last_hit_tick}
+
+    # Ricochet
+    'bullet_bounces': 0,           # current ricochet count (0–2)
+
+    # Emoji
+    'emoji': None,
+    'emoji_end_time': 0,
+
+    # Team (Duel mode)
+    'team': None,                  # 'red' | 'blue' | None
+}
+```
+
+### 3. Collision Detection
+
+**AABB** — tanks vs walls, bullets vs walls, bullets vs tanks
 ```python
 if (x1 < x2 + w2 and x1 + w1 > x2 and
     y1 < y2 + h2 and y1 + h1 > y2):
-    # Collision!
+    # Collision
 ```
 
-**Point-to-Line Distance**
-Used for: laser beam vs tanks, laser beam vs snake
+**Penetration-depth push-out** — ghost mode wall exit
 ```python
-# Project point onto line
+# _push_out_of_wall(tank): find overlapping rampart,
+# nudge along shallowest AABB axis
+```
+
+**Point-to-line distance** — laser beam vs tanks/snake
+```python
 t = max(0, min(1, dot_product / line_length_sq))
-proj_x = line_start_x + t * dx
-proj_y = line_start_y + t * dy
-distance = sqrt((point_x - proj_x)^2 + (point_y - proj_y)^2)
+proj_x = lx + t * dx; proj_y = ly + t * dy
+dist = sqrt((px - proj_x)**2 + (py - proj_y)**2)
 ```
 
-**Distance Check**
-Used for: tank vs supply drops, tank vs shield
+**Distance check** — power-up/bomb collection
 ```python
-distance = sqrt((x1 - x2)^2 + (y1 - y2)^2)
-if distance < collection_radius:
-    # Collected!
+if dx*dx + dy*dy < collection_radius**2:
+    # Collected
 ```
 
-### 3. Socket.IO Events
+### 4. Socket.IO Events
 
 **Client → Server**
 ```javascript
-// Player actions
-socket.emit('join_game', {name, map_type, color, icon, skill})
-socket.emit('key_state', {key: 'w', pressed: true})
-socket.emit('rotate', {angle: 1.57})
+socket.emit('join_game',           {name, map_type, game_mode, color, tank_class})
+socket.emit('key_state',           {key: 'w', pressed: true})
+socket.emit('rotate',              {angle: 1.57})
 socket.emit('shoot')
-socket.emit('activate_skill')
+socket.emit('activate_skill')       // C key — ultimate ability
+socket.emit('activate_atomic_bomb') // X key
+socket.emit('set_emoji',           {emoji: '😁'})
 ```
 
 **Server → Client**
 ```javascript
-// Game updates
-socket.on('game_state', (data) => {})      // 30 times/sec
-socket.on('player_joined', (data) => {})
-socket.on('tank_destroyed', (data) => {})
-socket.on('supply_collected', (data) => {})
-socket.on('skill_activated', (data) => {})
-socket.on('snake_destroyed', (data) => {})
-socket.on('bots_spawned', (data) => {})
+socket.on('game_state',           (data) => {})  // 15 Hz
+socket.on('player_joined',        (data) => {})
+socket.on('tank_destroyed',       (data) => {})
+socket.on('supply_collected',     (data) => {})
+socket.on('skill_activated',      (data) => {})
+socket.on('laser_fired',          (data) => {})
+socket.on('gravity_pulse',        (data) => {})  // wave effect
+socket.on('gravity_warning',      (data) => {})
+socket.on('atomic_bomb_spawned',  (data) => {})
+socket.on('atomic_bomb_collected',(data) => {})
+socket.on('atomic_bomb_exploded', (data) => {})
+socket.on('bomb_warning',         (data) => {})
+socket.on('captain_selected',     (data) => {})
+socket.on('captain_targeted',     (data) => {})
+socket.on('snake_destroyed',      (data) => {})
+socket.on('bots_spawned',         (data) => {})
+socket.on('game_over',            (data) => {})  // Duel mode win
 ```
 
-### 4. State Management
+### 5. Per-type Power-up Timer System
 
-**Server Global State**
+Each power-up type expires independently using `powerup_end_times`:
 ```python
-players = {}           # {player_id: tank_data}
-bots = {}             # {bot_id: tank_data}
-bullets = []          # List of bullet objects
-terrain = []          # List of walls and bushes
-supply_drops = []     # Active power-ups on map
-snake = None          # Current snake (or None)
-shield_drop = None    # Shield power-up (or None)
+# On collect (refresh, not extend)
+tank['powerup_end_times'][drop['type']] = current_time + POWERUP_DURATION
+
+# On expire (update_powerups, runs every tick)
+for ptype in list(tank.get('powerup_end_times', {}).keys()):
+    if current_time >= tank['powerup_end_times'][ptype]:
+        tank['powerups'] = [p for p in tank['powerups'] if p != ptype]
+        del tank['powerup_end_times'][ptype]
 ```
 
-**Tank Object Structure**
-```python
-tank = {
-    'id': 'unique_id',
-    'name': 'PlayerName',
-    'x': 720, 'y': 420,
-    'angle': 0.0,
-    'vx': 0, 'vy': 0,
-    'color': '#32CD32',
-    'icon': '⭐',
-    'health': 100,
-    'max_health': 100,
-    'alive': True,
-    'score': 0,
-    'kills': 0,
-    'deaths': 0,
-    'shoot_cooldown': 0,
-    'respawn_timer': 0,
-    'powerups': [],              # ['fast_fire', 'fan_shot', 'speed_boost']
-    'powerup_end_time': 0,
-    'invincible_until': time + 3,
-    'skill': 'speed_demon',      # 'speed_demon' | 'laser_beam' | 'ghost_mode'
-    'skill_active': False,
-    'skill_end_time': 0,
-    'skill_cooldown_end': 0,
-    'keys': {'w': False, 'a': False, 's': False, 'd': False},
-    'is_bot': False              # True for AI bots
-}
-```
+Stack caps: `fan_shot` max 3×, `speed_boost` max 4×.
 
 ---
 
@@ -252,480 +307,373 @@ tank = {
 
 ### Movement & Physics
 
-**Tank Movement** (tank_server.py:1094-1184)
-- Speed: 5 pixels/tick (or 10 with speed boost)
-- Diagonal movement normalized (same speed in all directions)
-- Collision with walls prevents movement
-- Wraps around screen edges
+- Base speed: **5.0 px/tick**; diagonal normalized
+- Hard clamped to arena bounds (no wrap)
+- Bullets also blocked at boundaries
+- Ghost mode: ignores wall AABB; pushed out at skill end
 
-**Bullet Movement** (tank_server.py:1186-1322)
-- Speed: 9.2 pixels/tick
-- Lifetime: 115 ticks (~3.8 seconds)
-- Wraps around screen edges
-- Destroyed on wall collision
+### Bullet System
 
-### Combat System
+- Speed: **10.12 px/tick** (9.2 +10%)
+- Lifetime: **115 ticks** (~3.8 s)
+- Damage: **25 HP**
+- Ricochet: unlocks at 500 score (1 bounce), 1000 score (2 bounces)
+- Blocked at arena boundary
 
-**Shooting** (tank_server.py:1708-1758)
-- Cooldown: 15 ticks (0.5 seconds)
-- Damage: 25 HP per bullet
-- Fast Fire: 3 tick cooldown (10 shots/sec)
-- Fan Shot: 3 bullets in spread pattern
+### Combat
 
-**Tank Health**
-- Max: 100 HP
-- Death: Respawns after 5 seconds
-- Kill reward: +100 points
-- Spawn protection: 3 seconds invincibility
+| Property | Value |
+|---|---|
+| Max health | 100 HP |
+| Respawn time | 5 seconds |
+| Spawn invincibility | 3 seconds |
+| Kill reward | +100 score |
+| Shoot cooldown | 15 ticks (0.5 s) |
+| Fast fire cooldown | 3 ticks (0.1 s) |
 
 ### Power-up System
 
-**Regular Power-ups** (spawn every 10 seconds)
-```python
-'fast_fire'     # 10 shots/sec for 10 seconds
-'fan_shot'      # 3 bullets spread for 10 seconds
-'speed_boost'   # 2x speed for 10 seconds
-```
+**Regular drops** (every 10 s, up to 2 active)
+| Type | Effect | Duration |
+|---|---|---|
+| `fast_fire` | 10 shots/sec | 10 s |
+| `fan_shot` | 3-bullet spread (+2 per stack) | 10 s each stack |
+| `speed_boost` | 2× speed (+100% per stack) | 10 s each stack |
 
-**Super Power-up** (spawns every 60 seconds)
-```python
-'super_powerup' # All 3 abilities for 6 seconds
-```
+**Super drop** (every 60 s) — all 3 for 6 s
 
-**Shield Drop** (spawns every 10 seconds)
-```python
-'invincibility_shield' # 6 seconds invincibility
-```
+**Shield drop** (every 10 s) — invincibility 6 s (max 10 s remaining)
 
-### Ultimate Skills System
+**Atomic Bomb** — single collectible item; world always has exactly one;
+spawns 5 s after becoming bomb-free (no ground bomb + no carrier).
 
-**Press 'C' to activate** (30 second cooldown after skill ends)
+### Tank Classes & Ultimate Skills
 
-**Speed Demon** ⚡ (4 seconds)
-- 5x movement speed (400% increase)
-- +100 damage per bullet
-- Location: tank_server.py:1486-1487
+Skills are **fixed per class** — selected at the welcome screen:
 
-**Laser Beam** 🔴 (1 seconds)
-- Instant kill any tank in laser path
-- Damages snake: 100 HP every 0.5s
-- Range: 800 pixels
-- Width: 50 pixels
-- Location: tank_server.py:813-906
+| Class | Skill | Key | Cooldown | Duration | Effect |
+|---|---|---|---|---|---|
+| **Gun Tank** | Laser Beam 🔴 | C | 30 s | 1 s prep + 0.5 s fire | Instant kill in 800 px line |
+| **Light Tank** | Speed Demon ⚡ | C | 20 s | 4 s | 5× speed, +100 bullet damage |
+| **Armored Tank** | Ghost Mode 👻 | C | 25 s | 5 s | Phase walls, full invincibility |
+| **Gravity Tank** | Gravity Pulse 🌑 | C | 25 s | 1 s charge | Clears bullets 500 px, 50 HP + 3 s freeze in radius |
+| **Transformer** | Transform 🤖 | C | 24 s | 8 s | +80% speed, 50 HP melee/0.5 s, no shooting |
 
-**Ghost Mode** 👻 (5 seconds)
-- Phase through walls
-- Total invincibility
-- Cannot be damaged
-- Location: tank_server.py:1490-1491
+### Atomic Bomb
 
-### Map Generation
+- Press **X** to arm (3 s countdown, frozen in place)
+- Kills all non-invincible players on detonation
+- **2 s post-detonation freeze** for carrier
+- Carrier is **always visible** (orange targeting rings, semi-transparent in bushes)
+- On carrier death (including during arming): bomb **drops at death position**
+- New bomb spawns **5 s** after world becomes bomb-free
 
-**Three map types** (terrain_generated on first player join)
+### Captain System
 
-**Basic** (tank_server.py:154-216)
-- 1-2 walls
-- 1-2 bushes
-- Fast & Simple
+- One random player is always designated Captain
+- Captain gets: +50% speed, 2-fan bullets, +50% fire rate
+- Every 30 s: "Hunt the Captain" broadcast — kill reward +1000 score
+- Captain visible in bushes (golden crown, semi-transparent)
+- Killing captain triggers new captain selection
 
-**Advanced** (tank_server.py:218-292)
-- 3-4 walls
-- 2-3 bushes
-- Balanced (default)
+### Duel Mode
 
-**Maze** (tank_server.py:294-378)
-- 7-8 walls
-- 4-5 bushes
-- Tactical & Complex
+- Red vs Blue teams (max 5 per team)
+- Win condition: destroy enemy base OR reach 50 team kills
+- Base health: 1000 HP; base size: 80 px
+- Teams assigned alternately on join
 
-**Terrain Features**
-- Walls: Block movement and bullets
-- Bushes: Hide tanks (invisible to others)
-- Spacing: 60-90 pixel gaps between objects
+### Bush / Stealth System
+
+- Tanks inside a bush are `hidden` — invisible to others
+- **Exceptions** (always drawn):
+  - Own tank (0.7 alpha)
+  - Captain (0.6 alpha)
+  - Atomic bomb carrier (0.6 alpha)
+  - Players sharing the **same bush** (0.75 alpha)
+- `bush_index` per player enables same-bush detection
 
 ### Snake System
 
-**Huge Snake** (tank_server.py:563-686)
-- Spawns every 30 seconds
-- Size: 13 cells long × 3 cells wide = 39 total cells
-- Health: 2000 HP
-- Speed: 5 pixels/tick
-- Damage: Instant death on touch
-- Bullet Damage: 25 HP per bullet
-- Laser Damage: 100 HP every 0.5 seconds
-- Destroy Reward: +500 points
-- Moves in 8 directions (including diagonals)
-- Crosses screen and disappears
+- Spawns every 30 s
+- Size: 26 cells long × 3 cells wide (full AABB collision)
+- Health: **2000 HP**; speed: **13.5 px/tick**
+- Instant death on touch
+- Bullet damage: 25 HP; laser damage: 100 HP per 0.5 s
+- Destroy reward: **+500 score**
+- Client lerp via `snakeRenderPos` for smooth rendering
+
+### Ricochet System
+
+| Score | Bounces |
+|---|---|
+| 0–499 | 0 |
+| 500–999 | 1 |
+| 1000+ | 2 |
+
+### Emoji System
+
+- Press **T** to open emoji picker (←/→ select, Enter confirm, Esc/T cancel)
+- Emoji displayed above tank for **5 s**
+- Server validates against official `EMOJI_LIST` (10 emojis)
 
 ### AI Bot System
 
-**Auto-spawn Logic** (tank_server.py:1076-1091)
-- 1 human player → Spawn 2 bots
-- 2+ human players → Remove all bots
-
-**Bot Behavior** (tank_server.py:1020-1073)
-- Random movement: Changes direction every 2 seconds
-- Random shooting: Fires every 1.5 seconds
-- Uses power-ups and skills
-- Respawns like human players
-- Marked with 🤖 emoji
+- 1 human → spawn 2 bots; 2+ humans → remove all bots
+- Bot behavior: random direction change every 2 s, shoot every 1.5 s
+- Bots use skills and pick up power-ups
+- Marked with 🤖 in name
 
 ---
 
 ## Features Reference
 
-### Current Features (v2.1)
+### Current Features (v3.0)
 
 #### Core Gameplay
-✅ Real-time multiplayer (up to 10+ players)
-✅ Smooth tank movement (WASD)
-✅ Mouse aim with turret rotation
-✅ Shooting with cooldown
-✅ Health system (100 HP)
-✅ Kill/death tracking
-✅ Score system
-✅ Auto-respawn (5 seconds)
+✅ Real-time multiplayer (20+ players optimized)  
+✅ WASD movement, mouse aim, click/space shoot  
+✅ 5 tank classes with unique visuals and ultimates  
+✅ Health system (100 HP), kill/death tracking, score  
+✅ Auto-respawn (5 s) with spawn protection (3 s)  
+✅ Hard boundary clamping (no wrapping)  
 
-#### Combat & Power-ups
-✅ 3 Regular power-ups (fast fire, fan shot, speed boost)
-✅ 1 Super power-up (all abilities)
-✅ 1 Shield drop (invincibility)
-✅ Power-up stacking
-✅ Visual power-up indicators
+#### Game Modes
+✅ Free-for-All (FFA)  
+✅ Duel (Red vs Blue, base destruction or 50 kills)  
+✅ Voting — first player's choice sets map & mode  
+
+#### Map Types
+✅ Basic (1–2 walls, 1–2 bushes)  
+✅ Advanced (3–4 walls, 2–3 bushes) — default  
+✅ Maze (7–8 walls, 4–5 bushes)  
+
+#### Power-ups & Items
+✅ 3 regular power-ups with independent per-type timers  
+✅ Additive stacking (fan ×3 max, speed ×4 max)  
+✅ Super drop (all 3 abilities)  
+✅ Shield drop (invincibility)  
+✅ Atomic bomb (drop on death, 5 s respawn after gone)  
 
 #### Ultimate Skills
-✅ Speed Demon (5x speed, +100 damage, 4s)
-✅ Laser Beam (instant kill, 3s)
-✅ Ghost Mode (phase through walls, 5s)
-✅ 30 second cooldown
-✅ Press 'C' to activate
+✅ Laser Beam — instant kill ray, 30 s CD  
+✅ Speed Demon — 5× speed, 20 s CD  
+✅ Ghost Mode — phase walls, 25 s CD  
+✅ Gravity Pulse — bullet clear + freeze, 25 s CD  
+✅ Transformer — robot mode melee, 24 s CD  
 
-#### Map System
-✅ 3 map types (Basic, Advanced, Maze)
-✅ In-game map selection
-✅ First player chooses map
-✅ Dynamic terrain generation
-✅ Bush stealth system
-
-#### Enemy System
-✅ Huge Snake (2000 HP)
-✅ 8-directional movement
-✅ 39 cell collision (full body)
-✅ Instant death on touch
-✅ Destroyable by bullets/laser
-✅ +500 points reward
-
-#### AI System
-✅ Auto-spawn 2 bots for solo play
-✅ Random movement AI
-✅ Random shooting AI
-✅ Bot respawning
-✅ Auto-removal when players join
-
-#### Customization
-✅ Custom tank colors
-✅ 10 tank icons (⭐🔥💎⚡👑🎯💀🌟🚀🎮)
-✅ Player names
-✅ Skill selection
+#### Special Systems
+✅ Captain system (bounty, +50% stats, crown targeting)  
+✅ Atomic bomb targeting ring (carrier never fully hidden)  
+✅ Ricochet bullets (score-gated, up to 2 bounces)  
+✅ Emoji expressions (press T)  
+✅ Same-bush visibility  
+✅ Snake enemy (26 cells, 2000 HP, destroyable)  
+✅ AI bots (auto-spawn solo, removed on 2+ players)  
+✅ Death💀 emoji on kill confirmation  
 
 #### UI/UX
-✅ Welcome screen with customization
-✅ Death screen with stats
-✅ Leaderboard (top 10)
-✅ Player count
-✅ Health bars above tanks
-✅ Crosshair
-✅ Skill cooldown indicator
-✅ Power-up timer
-✅ Notifications
-✅ Spawn protection indicator
+✅ Welcome screen (class/color/mode/map selection with live previews)  
+✅ Death screen with K/D and killer name  
+✅ Game-over screen (Duel mode)  
+✅ Leaderboard (top players)  
+✅ Per-type power-up timer bars  
+✅ Skill cooldown progress bar  
+✅ Atomic bomb panel (arm countdown, post-detonation freeze)  
+✅ Gravity wave / Transformer aura visual effects  
+✅ Client-side bullet extrapolation (smooth 60fps+)  
 
 ---
 
-## Code Locations
-
-### Constants (tank_server.py:60-126)
+## Constants Reference
 
 ```python
 # Arena
-ARENA_WIDTH = 1440
+ARENA_WIDTH  = 1440
 ARENA_HEIGHT = 840
+GAME_TICK_RATE = 30      # server ticks/sec; broadcast every 2nd tick = 15 Hz
 
 # Tank
-TANK_SIZE = 30
+TANK_SIZE  = 30
 TANK_SPEED = 5.0
 TANK_MAX_HEALTH = 100
 
 # Bullet
-BULLET_SPEED = 9.2
-BULLET_DAMAGE = 25
-BULLET_LIFETIME = 115
-SHOOT_COOLDOWN = 15  # ticks
+BULLET_SPEED    = 10.12  # px/tick (9.2 +10%)
+BULLET_DAMAGE   = 25
+BULLET_LIFETIME = 115    # ticks
+SHOOT_COOLDOWN  = 15     # ticks (0.5 s)
+
+# Ricochet
+RICOCHET_SCORE_1 = 500   # unlock 1st bounce
+RICOCHET_SCORE_2 = 1000  # unlock 2nd bounce
 
 # Power-ups
-SUPPLY_DROP_INTERVAL = 10      # seconds
-POWERUP_DURATION = 10          # seconds
-SUPER_DROP_INTERVAL = 60       # seconds
-SUPER_POWERUP_DURATION = 6     # seconds
-SHIELD_DROP_INTERVAL = 10      # seconds
-SHIELD_DURATION = 6            # seconds
+SUPPLY_DROP_INTERVAL  = 10  # s
+POWERUP_DURATION      = 10  # s
+SUPER_DROP_INTERVAL   = 60  # s
+SUPER_POWERUP_DURATION = 6  # s
+SHIELD_DROP_INTERVAL  = 10  # s
+SHIELD_DURATION       = 6   # s
+
+# Atomic Bomb
+ATOMIC_BOMB_RESPAWN_DELAY = 5    # s after world bomb-free
+ATOMIC_BOMB_PREPARATION   = 3.0  # s arming phase
+ATOMIC_BOMB_FREEZE        = 2.0  # s post-detonation freeze
 
 # Snake
-SNAKE_INTERVAL = 30            # seconds
-SNAKE_CELL_SIZE = 30
-SNAKE_WIDTH_CELLS = 3
-SNAKE_LENGTH_CELLS = 13
-SNAKE_SPEED = 5
+SNAKE_INTERVAL     = 30    # s between spawns
+SNAKE_CELL_SIZE    = 30    # px
+SNAKE_WIDTH_CELLS  = 3
+SNAKE_LENGTH_CELLS = 26
+SNAKE_SPEED        = 13.5  # px/tick (-10% from original)
 
-# Skills
-SKILL_COOLDOWN = 30                    # seconds
-SKILL_SPEED_DEMON_DURATION = 4         # seconds
-SKILL_SPEED_DEMON_SPEED_MULT = 5.0
+# Captain
+CAPTAIN_SPEED_MULTIPLIER     = 1.5
+CAPTAIN_FIRE_RATE_MULTIPLIER = 1.5
+CAPTAIN_KILL_REWARD          = 1000
+CAPTAIN_TARGET_INTERVAL      = 30   # s between bounty pulses
+CAPTAIN_TARGET_DURATION      = 5.0  # s targeting visual
+
+# Skills — per-skill cooldowns
+SKILL_COOLDOWN_SPEED_DEMON = 20  # s
+SKILL_COOLDOWN_LASER_BEAM  = 30  # s
+SKILL_COOLDOWN_GHOST_MODE  = 25  # s
+SKILL_COOLDOWN_GRAVITY     = 25  # s
+SKILL_COOLDOWN_TRANSFORMER = 24  # s
+
+# Speed Demon
+SKILL_SPEED_DEMON_DURATION     = 4      # s
+SKILL_SPEED_DEMON_SPEED_MULT   = 5.0    # 5× speed
 SKILL_SPEED_DEMON_DAMAGE_BONUS = 100
-SKILL_LASER_BEAM_DURATION = 3          # seconds
-SKILL_LASER_RANGE = 1500
-SKILL_GHOST_MODE_DURATION = 5          # seconds
+
+# Laser Beam
+SKILL_LASER_BEAM_PREPARATION = 1.0  # s charge
+SKILL_LASER_BEAM_DURATION    = 0.5  # s fire
+SKILL_LASER_BEAM_COOLDOWN    = 1.0  # s post-fire freeze
+SKILL_LASER_RANGE            = 800  # px
+
+# Ghost Mode
+SKILL_GHOST_MODE_DURATION = 5  # s
+
+# Gravity Pulse
+SKILL_GRAVITY_PREPARATION    = 1.0   # s charge
+SKILL_GRAVITY_RADIUS         = 500   # px
+SKILL_GRAVITY_DAMAGE         = 50    # HP
+SKILL_GRAVITY_FREEZE_DURATION = 3.0  # s targets frozen
+
+# Transformer
+SKILL_TRANSFORMER_DURATION     = 8.0   # s
+SKILL_TRANSFORMER_SPEED_MULT   = 0.8   # +80% speed (additive)
+SKILL_TRANSFORMER_DAMAGE       = 50    # HP per melee hit
+SKILL_TRANSFORMER_DAMAGE_TICKS = 15    # ticks between hits
 
 # Bots
-BOT_MOVE_CHANGE_INTERVAL = 60  # ticks (2 seconds)
-BOT_SHOOT_INTERVAL = 45        # ticks (1.5 seconds)
+BOT_MOVE_CHANGE_INTERVAL = 60  # ticks (2 s)
+BOT_SHOOT_INTERVAL       = 45  # ticks (1.5 s)
+
+# Duel Mode
+DUEL_MAX_TEAM_SIZE = 5
+DUEL_WIN_KILLS     = 50
+DUEL_BASE_HEALTH   = 1000
+DUEL_BASE_SIZE     = 80
+
+# Emoji
+EMOJI_DISPLAY_DURATION = 5.0  # s
 ```
-
-### Key Functions Reference
-
-**Terrain Generation**
-- `generate_terrain_basic()` - lines 154-216
-- `generate_terrain_advanced()` - lines 218-292
-- `generate_terrain_maze()` - lines 294-378
-- `check_terrain_overlap()` - lines 142-151
-
-**Power-ups**
-- `spawn_supply_drops()` - lines 476-518
-- `spawn_super_drop()` - lines 521-560
-- `spawn_shield_drop()` - lines 688-717
-- `check_supply_drop_collection()` - lines 745-786
-
-**Snake**
-- `spawn_snake()` - lines 563-612
-- `update_snake()` - lines 614-628
-- `check_snake_collision()` - lines 630-685
-
-**Skills**
-- `update_skills()` - lines 806-973
-- Laser beam damage to snake - lines 825-906
-- Laser beam kills tanks - lines 908-964
-
-**Bot AI**
-- `create_bot()` - lines 922-978
-- `spawn_bots()` - lines 981-995
-- `remove_all_bots()` - lines 998-1017
-- `update_bot_ai()` - lines 1020-1073
-- `check_and_manage_bots()` - lines 1076-1091
-
-**Tank Management**
-- `create_tank()` - lines 976-1019
-- `update_tank_movement()` - lines 1094-1184
-- `update_bullets()` - lines 1186-1322
-
-**Socket.IO Handlers**
-- `handle_connect()` - lines 1605-1613
-- `handle_disconnect()` - lines 1615-1635
-- `handle_join_game()` - lines 1637-1687
-- `handle_key_state()` - lines 1689-1699
-- `handle_rotate()` - lines 1701-1709
-- `handle_shoot()` - lines 1711-1758
-- `handle_activate_skill()` - lines 1760-1793
 
 ---
 
 ## How to Add/Modify Features
 
-### Adding a New Power-up
+### Adding a New Tank Class + Skill
 
-**1. Add to server constants** (tank_server.py)
+**1. Add skill constants** (tank_server.py, constants block)
 ```python
-NEW_POWERUP_DURATION = 10  # seconds
+SKILL_COOLDOWN_MYSKILL  = 20
+SKILL_MYSKILL_DURATION  = 5
 ```
 
-**2. Add to spawn function** (tank_server.py:476-518)
+**2. Add to `CLASS_TO_SKILL` in `handle_join_game`**
 ```python
-available_types = ['fast_fire', 'fan_shot', 'speed_boost', 'new_powerup']
-```
-
-**3. Implement effect** (tank_server.py:1711-1758)
-```python
-if 'new_powerup' in tank['powerups']:
-    # Apply effect
-    pass
-```
-
-**4. Add client-side rendering** (game.js)
-```javascript
-// In drawSupplyDrops function
-if (drop.type === 'new_powerup') {
-    // Draw custom visual
+CLASS_TO_SKILL = {
+    'gun': 'laser_beam', 'light': 'speed_demon',
+    'armored': 'ghost_mode', 'gravity': 'gravity',
+    'transformer': 'transformer',
+    'myclass': 'myskill'
 }
 ```
 
-### Adding a New Ultimate Skill
-
-**1. Add constants** (tank_server.py:118-125)
+**3. Implement skill logic in `update_skills`**
 ```python
-SKILL_NEW_SKILL_DURATION = 5  # seconds
-SKILL_NEW_SKILL_PARAMETER = 100
-```
-
-**2. Update create_tank** (tank_server.py:976)
-```python
-tank_skill = skill if skill in ['speed_demon', 'laser_beam', 'ghost_mode', 'new_skill'] else 'speed_demon'
-```
-
-**3. Implement skill logic** (tank_server.py:806-973)
-```python
-if tank['skill_active'] and tank['skill'] == 'new_skill':
-    # Apply skill effect every tick
+if tank['skill_active'] and tank['skill'] == 'myskill':
+    # apply effect every tick
     pass
 ```
 
-**4. Update activate handler** (tank_server.py:1760-1793)
+**4. Add activate branch in `handle_activate_skill`**
 ```python
-if skill == 'new_skill':
-    duration = SKILL_NEW_SKILL_DURATION
+skill_durations = {
+    ...,
+    'myskill': SKILL_MYSKILL_DURATION
+}
+_cooldowns = {
+    ...,
+    'myskill': SKILL_COOLDOWN_MYSKILL
+}
 ```
 
-**5. Add to HTML** (index.html:81-113)
-```html
-<label class="skill-option">
-    <input type="radio" name="skill" value="new_skill">
-    <div class="skill-card">
-        <div class="skill-icon">🆕</div>
-        <strong>New Skill</strong>
-        <p class="skill-desc">Description</p>
-        <p class="skill-cooldown">5s Duration • 30s CD</p>
-    </div>
-</label>
-```
-
-**6. Add to client** (game.js:940-952)
+**5. Add tank renderer in `drawTankByClass` (game.js)**
 ```javascript
-const skillNames = {
-    'speed_demon': 'Speed Demon',
-    'laser_beam': 'Laser Beam',
-    'ghost_mode': 'Ghost Mode',
-    'new_skill': 'New Skill'
-};
+} else if (tankClassSafe === 'myclass') {
+    // draw body and turret
+}
 ```
 
-### Adding a New Map Type
-
-**1. Create generation function** (tank_server.py)
-```python
-def generate_terrain_custom():
-    """Generate custom map"""
-    global terrain
-    terrain = []
-
-    # Generate walls
-    num_walls = random.randint(5, 7)
-    # ... implementation
-
-    # Generate bushes
-    num_bushes = random.randint(3, 5)
-    # ... implementation
-```
-
-**2. Add to terrain generator** (tank_server.py:395-413)
-```python
-if map_type == 'custom':
-    generate_terrain_custom()
-```
-
-**3. Add to HTML** (index.html:115-143)
+**6. Add class card in `index.html`**
 ```html
-<label class="map-option">
-    <input type="radio" name="map-type" value="custom">
-    <div class="map-card">
-        <strong>Custom</strong>
-        <p>5-7 walls, 3-5 bushes</p>
-        <p class="map-diff">🎨 Creative</p>
+<label class="tank-class-option">
+    <input type="radio" name="tank-class" value="myclass">
+    <div class="tank-class-card">
+        <canvas class="tank-preview-canvas" data-class="myclass" width="140" height="110"></canvas>
+        <strong>My Tank</strong>
+        <p class="tank-class-desc">Description</p>
+        <p class="tank-class-ult">🆕 Ultimate: MySkill — effect, Xs</p>
     </div>
 </label>
 ```
 
-**4. Add to map votes** (tank_server.py:1649)
+### Adding a New Power-up
+
+**1. Add to `available_types` in `spawn_supply_drops`**
 ```python
-if map_choice in ['basic', 'advanced', 'maze', 'custom']:
+available_types = ['fast_fire', 'fan_shot', 'speed_boost', 'my_powerup']
 ```
 
-### Modifying Game Constants
-
-**Speed up gameplay:**
+**2. Apply effect in `update_tank_movement` or bullet logic**
 ```python
-GAME_TICK_RATE = 60  # From 30 to 60 FPS
-TANK_SPEED = 10.0    # From 5.0 (faster tanks)
-BULLET_SPEED = 15.0  # From 9.2 (faster bullets)
+if 'my_powerup' in tank.get('powerups', []):
+    # apply effect
 ```
 
-**Increase difficulty:**
-```python
-TANK_MAX_HEALTH = 50          # From 100 (less health)
-SNAKE_SPEED = 10              # From 5 (faster snake)
-SUPPLY_DROP_INTERVAL = 20     # From 10 (fewer power-ups)
+**3. Set per-type timer in `check_supply_drop_collection`** (already handled generically by the `powerup_end_times` system)
+
+**4. Add client visual in `drawSupplyDrops` (game.js)**
+```javascript
+if (drop.type === 'my_powerup') {
+    ctx.fillText('⭐', drop.x, drop.y);
+}
 ```
 
-**Change skill balance:**
-```python
-SKILL_COOLDOWN = 60                    # From 30 (longer cooldown)
-SKILL_SPEED_DEMON_DURATION = 2         # From 4 (shorter duration)
-SKILL_LASER_BEAM_DURATION = 1          # From 3 (shorter)
-```
-
-### Adding New Bot Behaviors
-
-**Example: Smart bot that targets nearest player**
+### Modifying Speed/Balance
 
 ```python
-def update_bot_ai_smart(bot: dict):
-    """Smarter bot AI - targets nearest player"""
-    if not bot['alive']:
-        return
+TANK_SPEED   = 5.0   # base speed
+BULLET_SPEED = 10.12 # bullet px/tick
+SNAKE_SPEED  = 13.5  # snake px/tick
 
-    # Find nearest human player
-    nearest_player = None
-    min_distance = float('inf')
-
-    for player_id, player in players.items():
-        if player.get('is_bot') or not player['alive']:
-            continue
-
-        distance = math.sqrt((bot['x'] - player['x'])**2 +
-                            (bot['y'] - player['y'])**2)
-        if distance < min_distance:
-            min_distance = distance
-            nearest_player = player
-
-    if nearest_player:
-        # Move towards player
-        angle_to_player = math.atan2(
-            nearest_player['y'] - bot['y'],
-            nearest_player['x'] - bot['x']
-        )
-
-        # Set movement keys based on angle
-        bot['keys']['w'] = abs(angle_to_player) < math.pi / 4
-        bot['keys']['s'] = abs(angle_to_player) > 3 * math.pi / 4
-        bot['keys']['a'] = angle_to_player < 0
-        bot['keys']['d'] = angle_to_player > 0
-
-        # Aim at player
-        bot['angle'] = angle_to_player
-
-        # Shoot if close enough
-        if min_distance < 500 and bot['shoot_cooldown'] == 0:
-            # Fire bullet
-            bullet = create_bullet(bot, bot['angle'])
-            bullets.append(bullet)
-            bot['shoot_cooldown'] = SHOOT_COOLDOWN
+# To speed up everything
+GAME_TICK_RATE = 60  # doubles simulation speed
 ```
 
 ---
@@ -734,233 +682,144 @@ def update_bot_ai_smart(bot: dict):
 
 ### Common Issues
 
-**Issue: Port already in use**
+**Port already in use**
 ```bash
-# Solution: Kill existing server
 pkill -f "python tank_server.py"
-
-# Or use different port
-python tank_server.py 8052
+python tank_server.py
 ```
 
-**Issue: Clients not receiving updates**
+**Clients not receiving updates**
 ```python
-# Check game loop is running
-print(f'Game loop tick - Players: {len(players)}')  # Add to game_loop()
-
-# Check socketio.emit is being called
-socketio.emit('game_state', game_state, namespace='/')
+# Confirm broadcast runs: check tick_count % 2 == 0 path
+# Confirm socketio.emit('game_state', ...) is reached
 ```
 
-**Issue: Collision detection not working**
+**Tank class mismatch (joined as wrong class)**
 ```python
-# Add debug logging
-if check_terrain_collision(x, y, w, h):
-    print(f'Collision at ({x}, {y})')
+# Ensure CLASS_TO_SKILL in handle_join_game includes the new class
+# Ensure create_tank receives the correct tank_class argument
 ```
 
-**Issue: Snake not spawning**
+**Ghost stuck in wall after skill end**
 ```python
-# Check terrain is generated
-if not terrain_generated:
-    print('ERROR: Terrain not generated yet!')
-
-# Check timer
-if current_time - last_snake_time >= SNAKE_INTERVAL:
-    print(f'Spawning snake at {current_time}')
+# _push_out_of_wall(tank) is called on skill end in update_skills
+# Verify terrain_ramparts list is populated (not terrain)
 ```
 
-**Issue: Laser beam not damaging**
+**Power-up never expires**
 ```python
-# Check skill is active
-if tank['skill_active'] and tank['skill'] == 'laser_beam':
-    print(f'Laser active for {tank["name"]}')
-
-# Check snake exists
-if snake is not None:
-    print(f'Snake at ({snake["x"]}, {snake["y"]}) HP: {snake["health"]}')
+# Check update_powerups() runs every tick
+# Check powerup_end_times dict uses correct type key string
 ```
 
-### Performance Issues
-
-**High CPU usage**
+**Atomic bomb not dropping on death**
 ```python
-# Reduce tick rate
-GAME_TICK_RATE = 20  # From 30
-
-# Reduce collision checks
-# Only check nearby objects instead of all
+# death handler must call drop_atomic_bomb_at(tank['x'], tank['y'])
+# before setting has_atomic_bomb = False
+# Three death paths: bullet hit, snake hit, update_skills cancel
 ```
 
-**High network usage**
-```python
-# Send compressed game state
-# Only send changed data instead of full state
+### Performance Notes
 
-# Reduce update frequency for distant players
-```
+- Broadcast at 15 Hz (every 2 ticks) to halve network load vs 30 Hz
+- `terrain_ramparts` / `terrain_bushes` pre-split lists avoid type-checking in hot loops
+- Bullet `_lastBulletStateTime` + `vx/vy` extrapolation on client removes need for 30 Hz bullet updates
+- `renderPos` lerp runs at RAF rate — smooth even if server is at 15 Hz
 
 ### Testing Checklist
 
-**Before deploying changes:**
-- [ ] Server starts without errors
-- [ ] Players can join and spawn
-- [ ] Movement and shooting work
-- [ ] Power-ups spawn and are collectible
-- [ ] Skills activate and work correctly
-- [ ] Snake spawns and moves
-- [ ] Collisions work properly
-- [ ] Bots spawn for solo players
-- [ ] Map generation works for all types
-- [ ] Clients receive updates smoothly
-- [ ] No Python errors in console
-- [ ] No JavaScript errors in browser console
+Before deploying:
+- [ ] Server starts without errors (`python3 tank_server.py`)
+- [ ] `python3 -c "import ast; ast.parse(open('tank_server.py').read()); print('OK')"` passes
+- [ ] `node --check static/game.js` passes
+- [ ] All 5 tank classes selectable and join with correct skill
+- [ ] All 5 ultimates activate, deal damage/effect, cooldown correctly
+- [ ] Power-ups stack and expire independently per type
+- [ ] Atomic bomb: drop → pick up → X to arm → detonate; drop on death
+- [ ] Bush stealth: captain and bomb carrier always visible
+- [ ] Duel mode: teams assigned, base takes damage, win condition triggers
+- [ ] Snake spawns, moves, deals instant death, destroyable
+- [ ] Bots spawn solo, removed on 2 human players joining
 
 ---
 
 ## Development Workflow
 
-### Making Changes
-
-1. **Edit code** in tank_server.py or game.js
-2. **Restart server** (required for server changes)
-   ```bash
-   pkill -f "python tank_server.py"
-   python tank_server.py
-   ```
-3. **Refresh browser** (Ctrl+Shift+R or Cmd+Shift+R)
-4. **Test changes** in-game
-5. **Check console logs** (server and browser)
-
-### Git Workflow (if using version control)
-
+### Start / Restart Server
 ```bash
-# Create feature branch
-git checkout -b feature/new-powerup
-
-# Make changes and commit
-git add .
-git commit -m "Add new super speed powerup"
-
-# Test thoroughly
-python tank_server.py
-# Play test...
-
-# Merge to main
-git checkout main
-git merge feature/new-powerup
-git push
-```
-
-### Testing New Features
-
-1. **Unit test** - Test function in isolation
-2. **Integration test** - Test with game loop
-3. **Solo test** - Play alone with bots
-4. **Multiplayer test** - Test with 2+ players
-5. **Stress test** - Test with 10+ players
-
----
-
-## Quick Reference
-
-### Important URLs
-- **Game**: http://localhost:8051
-- **Source**: /Users/minhtrung.le/vietlinks/Note_task/GAME/tank_battle/
-
-### Key Commands
-```bash
-# Start server
+# Start
 python tank_server.py
 
-# Start on custom port
-python tank_server.py 8052
+# Kill and restart
+pkill -f "python tank_server.py" && python tank_server.py
 
-# Kill server
-pkill -f "python tank_server.py"
-
-# Check if running
+# Check running
 ps aux | grep tank_server.py
 ```
 
-### Key Shortcuts (In-game)
-- **WASD** - Move tank
-- **Mouse** - Aim turret
-- **Click / Space** - Shoot
-- **C** - Activate ultimate skill
-
-### Debug Mode
-
-Add this to tank_server.py for verbose logging:
-```python
-DEBUG = True
-
-def debug_log(message):
-    if DEBUG:
-        print(f'[DEBUG] {message}')
-
-# Use throughout code
-debug_log(f'Player {player_id} shot bullet at angle {angle}')
-```
+### Key In-Game Controls
+| Key | Action |
+|---|---|
+| WASD | Move |
+| Mouse | Aim turret |
+| Click / Space | Shoot |
+| C | Activate ultimate |
+| X | Arm atomic bomb |
+| T | Open emoji picker |
 
 ---
 
 ## Version History
 
-### v2.1 (Current) - April 2026
-- ✅ Fixed terrain overlap
-- ✅ Added in-game map selection
-- ✅ Fixed firing direction accuracy
-- ✅ Added snake HP system (2000 HP)
-- ✅ Added laser beam snake damage (100 HP / 0.5s)
-- ✅ Added AI bot system (auto-spawn for solo play)
-- ✅ Adjusted skill durations (Laser: 3s, Speed: 4s, Ghost: 5s)
-- ✅ Reduced map density (Basic: 1-2 walls, Advanced: 3-4, Maze: 7-8)
-- ✅ Fixed canvas visibility (reduced height to 840px)
+### v3.0 (Current) — April 2026
+- Added Gravity Tank class (Gravity Pulse ultimate)
+- Added Transformer Tank class (robot melee mode)
+- Per-skill individual cooldowns (20 / 24 / 25 / 25 / 30 s)
+- Per-type independent power-up expiry timers with additive stacking
+- Atomic bomb drops on carrier death (including during arming)
+- Bomb carrier targeting rings + always visible in bushes
+- Atomic bomb: fixed 60 s timer replaced with 5 s after bomb-free
+- Ghost mode: push-out-of-wall on skill end
+- Same-bush player visibility
+- Captain starts with 2 fan bullets (not 3)
+- Hard boundary clamp (no wrapping), bullets blocked at edges
+- Bullet speed +10%, snake speed −10%
+- Snake client-side lerp for smooth rendering
 
-### v2.0 - Enhanced Gameplay
-- Added ultimate skills system (3 skills)
-- Added snake enemy system
-- Added shield power-up
-- Added player customization
+### v2.1 — Early 2026
+- Laser beam snake damage (100 HP / 0.5 s)
+- AI bot system (auto-spawn solo)
+- In-game map/mode selection via first-player vote
+- Ricochet system (score-gated)
+- Captain system
+- Duel mode (Red vs Blue teams)
+- Emoji expression system
 
-### v1.0 - Initial Release
-- Basic multiplayer gameplay
-- Three map types
-- Power-up system
-- Kill/death tracking
+### v2.0 — 2025
+- Ultimate skills (Laser Beam, Speed Demon, Ghost Mode)
+- Snake enemy system
+- Shield power-up
+- Player customization (color, class)
+
+### v1.0 — Initial Release
+- Basic multiplayer, 3 map types, power-ups, kill/death tracking
 
 ---
 
 ## Resources
 
-### Documentation
 - Flask-SocketIO: https://flask-socketio.readthedocs.io/
-- Socket.IO: https://socket.io/docs/v4/
-- HTML5 Canvas: https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API
-
-### Game Design References
+- Socket.IO client: https://socket.io/docs/v4/
+- HTML5 Canvas API: https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API
 - 2D Collision Detection: https://developer.mozilla.org/en-US/docs/Games/Techniques/2D_collision_detection
-- Game Loop Patterns: https://gameprogrammingpatterns.com/game-loop.html
 
-### Python Libraries
 ```bash
+# Install dependencies
 pip install flask flask-socketio flask-cors gevent gevent-websocket
 ```
 
 ---
 
-## Contact & Support
-
-For questions or issues:
-1. Check this documentation
-2. Check TEST_LASER_SNAKE.md for testing guides
-3. Check FIXES_SUMMARY.md for recent changes
-4. Check server console for error messages
-5. Check browser console (F12) for client errors
-
----
-
-**Last Updated**: April 2026 (v2.1)
-**Maintainer**: TrungLe
-**Port**: 8051 (default)
+**Last Updated**: April 2026 (v3.0)  
+**Maintainer**: TrungLe  
+**Default Port**: 8051  
