@@ -111,3 +111,8 @@ tmp/
 *.key
 *.crt
 secrets/
+# Added by code-review-graph
+.code-review-graph/
+.claude
+.mcp*
+CLAUDE*
