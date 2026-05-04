@@ -1,6 +1,15 @@
 // Multiplayer Tank Battle - Client Side
 const socket = io();
 
+function escapeHtml(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 // Canvas setup
 const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
@@ -565,6 +574,91 @@ function getOrCreateRenderPos(player) {
 // Snake interpolation state — lerped each frame toward server target
 let snakeRenderPos = null; // { x, y, direction } or null when no snake
 
+// Offscreen canvas for snake body — rebuilt once per spawn, blit each frame
+let _snakeBodyCanvas = null;
+let _snakeBodyOriginX = 0; // x pixel of head within the offscreen canvas
+let _snakeBodyOriginY = 0; // y pixel of head within the offscreen canvas
+
+function _buildSnakeBodyCanvas(snakeLength) {
+    const cs = 30; // cellSize
+    const paddingRight = 50; // room for tongue/eyes extending forward from head
+    const paddingLeft = 10;  // tail clearance
+    const halfH = cs * 1 + 12; // 1.5 cells half-height + shadow
+    const cw = paddingLeft + Math.ceil(snakeLength) + paddingRight;
+    const ch = halfH * 2 + cs;
+    // Head is near the RIGHT edge; tail extends to the left toward x=paddingLeft
+    _snakeBodyOriginX = paddingLeft + Math.ceil(snakeLength);
+    _snakeBodyOriginY = ch / 2;
+
+    _snakeBodyCanvas = document.createElement('canvas');
+    _snakeBodyCanvas.width = cw;
+    _snakeBodyCanvas.height = ch;
+    const bctx = _snakeBodyCanvas.getContext('2d');
+    const lengthCells = 13;
+
+    for (let i = 0; i < lengthCells; i++) {
+        const t = lengthCells > 1 ? i / (lengthCells - 1) : 0;
+        // Head at (_snakeBodyOriginX, _snakeBodyOriginY), tail toward negative X
+        const segX = _snakeBodyOriginX - snakeLength * t;
+        const segY = _snakeBodyOriginY;
+
+        for (let w = -1; w <= 1; w++) {
+            // When direction=0, perpendicular is Y-axis
+            const cellX = segX;
+            const cellY = segY + w * cs;
+            const isHead = (i === 0);
+            const isDark = (i + w) % 2 === 0;
+
+            bctx.fillStyle = 'rgba(0,0,0,0.4)';
+            bctx.fillRect(cellX - cs / 2 + 3, cellY - cs / 2 + 3, cs, cs);
+
+            bctx.fillStyle = isHead ? '#FF0000' : (isDark ? '#8B0000' : '#A52A2A');
+            bctx.fillRect(cellX - cs / 2, cellY - cs / 2, cs, cs);
+
+            bctx.strokeStyle = '#000000';
+            bctx.lineWidth = 2;
+            bctx.strokeRect(cellX - cs / 2, cellY - cs / 2, cs, cs);
+
+            if (!isHead) {
+                bctx.strokeStyle = 'rgba(0,0,0,0.3)';
+                bctx.lineWidth = 1;
+                bctx.beginPath();
+                bctx.arc(cellX, cellY, cs / 3, 0, Math.PI * 2);
+                bctx.stroke();
+            }
+        }
+
+        if (i === 0) {
+            const eyeSize = 6, eyeSpacing = 10, eyeForward = 8;
+            // Left eye (perpendicular = -Y when direction=0)
+            const lx = _snakeBodyOriginX + eyeForward, ly = _snakeBodyOriginY - eyeSpacing;
+            bctx.fillStyle = '#FFFF00';
+            bctx.beginPath(); bctx.arc(lx, ly, eyeSize, 0, Math.PI * 2); bctx.fill();
+            bctx.fillStyle = '#000000';
+            bctx.beginPath(); bctx.arc(lx, ly, eyeSize / 2, 0, Math.PI * 2); bctx.fill();
+            // Right eye
+            const rx = _snakeBodyOriginX + eyeForward, ry = _snakeBodyOriginY + eyeSpacing;
+            bctx.fillStyle = '#FFFF00';
+            bctx.beginPath(); bctx.arc(rx, ry, eyeSize, 0, Math.PI * 2); bctx.fill();
+            bctx.fillStyle = '#000000';
+            bctx.beginPath(); bctx.arc(rx, ry, eyeSize / 2, 0, Math.PI * 2); bctx.fill();
+
+            // Tongue
+            const tongueLen = 15, tongueFork = 8;
+            const tx = _snakeBodyOriginX + cs / 2, ty = _snakeBodyOriginY;
+            const tipX = tx + tongueLen, tipY = ty;
+            bctx.strokeStyle = '#FF0000'; bctx.lineWidth = 3; bctx.lineCap = 'round';
+            bctx.beginPath(); bctx.moveTo(tx, ty); bctx.lineTo(tipX, tipY); bctx.stroke();
+            bctx.beginPath(); bctx.moveTo(tipX, tipY);
+            bctx.lineTo(tipX + Math.cos(-0.4) * tongueFork, tipY + Math.sin(-0.4) * tongueFork);
+            bctx.stroke();
+            bctx.beginPath(); bctx.moveTo(tipX, tipY);
+            bctx.lineTo(tipX + Math.cos(0.4) * tongueFork, tipY + Math.sin(0.4) * tongueFork);
+            bctx.stroke();
+        }
+    }
+}
+
 // Called each RAF frame with the elapsed ms since last frame
 function lerpRenderPositions(dt) {
     const alpha = Math.min(1, dt / (1000 / 30) * 0.85); // 85% of one server tick
@@ -582,10 +676,13 @@ function lerpRenderPositions(dt) {
         if (da < -Math.PI) da += 2 * Math.PI;
         rp.angle += da * alpha;
     });
-    // Clean up players who left
-    const activeIds = new Set(gameState.players.map(p => p.id));
-    for (const id of renderPos.keys()) {
-        if (!activeIds.has(id)) renderPos.delete(id);
+    // Clean up players who left — build set once without .map() allocation
+    if (renderPos.size > gameState.players.length) {
+        const activeIds = new Set();
+        for (let i = 0; i < gameState.players.length; i++) activeIds.add(gameState.players[i].id);
+        for (const id of renderPos.keys()) {
+            if (!activeIds.has(id)) renderPos.delete(id);
+        }
     }
 
     // Snake interpolation
@@ -687,7 +784,7 @@ function spawnMuzzleFlash(x, y, angle, color) {
         x: x,
         y: y,
         angle: angle,
-        startTime: Date.now(),
+        startTime: performance.now(),
         duration: 120,
         color: color || '#FFD700'
     });
@@ -1011,6 +1108,7 @@ socket.on('player_left', (data) => {
 
 let _lastBulletStateTime = 0; // performance.now() when last bullet data arrived
 
+let _uiUpdateCounter = 0;
 socket.on('game_state', (data) => {
     const preservedTerrain = gameState.terrain;
     detectPlayerEventsAndUpdatePrev(data.players || []);
@@ -1019,7 +1117,12 @@ socket.on('game_state', (data) => {
     if (!gameState.terrain && preservedTerrain) {
         gameState.terrain = preservedTerrain;
     }
-    updateUI();
+    // Throttle DOM updates to ~1Hz (every 15 packets at 15Hz server send rate)
+    _uiUpdateCounter++;
+    if (_uiUpdateCounter >= 15) {
+        _uiUpdateCounter = 0;
+        updateUI();
+    }
     // draw() is handled by the RAF loop — no direct call needed here
 });
 
@@ -1225,7 +1328,7 @@ socket.on('atomic_bomb_exploded', (data) => {
 
     // Start explosion animation
     explosionAnimation = {
-        startTime: Date.now(),
+        startTime: performance.now(),
         duration: 2000  // 2 seconds
     };
 });
@@ -1536,8 +1639,7 @@ function drawBase(base, borderColor, label) {
 }
 
 // Drawing functions
-function draw() {
-    const now = Date.now();
+function draw(now = performance.now()) {
 
     // Clear canvas
     ctx.fillStyle = '#2a2a2a';
@@ -1600,192 +1702,42 @@ function draw() {
         ctx.drawImage(terrainCanvas, 0, 0);
     }
 
-    // Draw huge segmented snake if active (3 cells wide × 13 cells long)
+    // Draw huge segmented snake — blit pre-rendered offscreen canvas, rotate in place
     if (gameState.snake && snakeRenderPos) {
-        // Merge interpolated position/direction with the rest of snake's server data
-        const snake = Object.assign({}, gameState.snake, {
-            x: snakeRenderPos.x,
-            y: snakeRenderPos.y,
-            direction: snakeRenderPos.direction
-        });
-        const cellSize = 30; // Same as TANK_SIZE
-        const widthCells = 3;
-        const lengthCells = 13;
+        const snakeData = gameState.snake;
+        const sx = snakeRenderPos.x, sy = snakeRenderPos.y, sd = snakeRenderPos.direction;
 
+        // Build (or rebuild) body canvas on first appearance
+        if (!_snakeBodyCanvas) _buildSnakeBodyCanvas(snakeData.length);
+
+        // Blit body: translate to head, rotate by direction, draw at offscreen origin offset
         ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(sd);
+        ctx.drawImage(_snakeBodyCanvas, -_snakeBodyOriginX, -_snakeBodyOriginY);
+        ctx.restore();
 
-        // Calculate snake segments (13 cells along length)
-        const segments = [];
-        for (let i = 0; i < lengthCells; i++) {
-            const t = i / (lengthCells - 1);
-            const segmentX = snake.x - Math.cos(snake.direction) * snake.length * t;
-            const segmentY = snake.y - Math.sin(snake.direction) * snake.length * t;
-            segments.push({ x: segmentX, y: segmentY, index: i });
-        }
+        // Health bar drawn in world space (not rotated)
+        if (snakeData.health !== undefined && snakeData.max_health !== undefined) {
+            const barWidth = 150, barHeight = 12;
+            const barX = sx - barWidth / 2;
+            const barY = sy - snakeData.length / 2 - 30;
+            const healthPercent = snakeData.health / snakeData.max_health;
+            let healthColor = healthPercent < 0.3 ? '#FF0000' : (healthPercent < 0.6 ? '#FFAA00' : '#00FF00');
 
-        // Draw each segment (3 cells wide)
-        segments.forEach((segment, idx) => {
-            const perpAngle = snake.direction + Math.PI / 2;
-
-            // Draw 3 cells wide for each segment
-            for (let w = -1; w <= 1; w++) {
-                const cellX = segment.x + Math.cos(perpAngle) * w * cellSize;
-                const cellY = segment.y + Math.sin(perpAngle) * w * cellSize;
-
-                // Alternate colors for pattern
-                const isHead = idx === 0;
-                const isDark = (idx + w) % 2 === 0;
-
-                // Draw shadow
-                ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-                ctx.fillRect(
-                    cellX - cellSize / 2 + 3,
-                    cellY - cellSize / 2 + 3,
-                    cellSize,
-                    cellSize
-                );
-
-                // Draw cell body
-                if (isHead) {
-                    ctx.fillStyle = '#FF0000'; // Bright red head
-                } else {
-                    ctx.fillStyle = isDark ? '#8B0000' : '#A52A2A'; // Dark red pattern
-                }
-                ctx.fillRect(
-                    cellX - cellSize / 2,
-                    cellY - cellSize / 2,
-                    cellSize,
-                    cellSize
-                );
-
-                // Draw cell border
-                ctx.strokeStyle = '#000000';
-                ctx.lineWidth = 2;
-                ctx.strokeRect(
-                    cellX - cellSize / 2,
-                    cellY - cellSize / 2,
-                    cellSize,
-                    cellSize
-                );
-
-                // Draw scales pattern
-                if (!isHead) {
-                    ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
-                    ctx.lineWidth = 1;
-                    ctx.beginPath();
-                    ctx.arc(cellX, cellY, cellSize / 3, 0, Math.PI * 2);
-                    ctx.stroke();
-                }
-            }
-
-            // Draw eyes on head (first segment, middle cell only)
-            if (idx === 0) {
-                const eyeSize = 6;
-                const eyeSpacing = 10;
-                const eyeForward = 8;
-
-                // Left eye
-                const leftEyeX = segment.x + Math.cos(snake.direction) * eyeForward - Math.cos(perpAngle) * eyeSpacing;
-                const leftEyeY = segment.y + Math.sin(snake.direction) * eyeForward - Math.sin(perpAngle) * eyeSpacing;
-
-                ctx.fillStyle = '#FFFF00';
-                ctx.beginPath();
-                ctx.arc(leftEyeX, leftEyeY, eyeSize, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.fillStyle = '#000000';
-                ctx.beginPath();
-                ctx.arc(leftEyeX, leftEyeY, eyeSize / 2, 0, Math.PI * 2);
-                ctx.fill();
-
-                // Right eye
-                const rightEyeX = segment.x + Math.cos(snake.direction) * eyeForward + Math.cos(perpAngle) * eyeSpacing;
-                const rightEyeY = segment.y + Math.sin(snake.direction) * eyeForward + Math.sin(perpAngle) * eyeSpacing;
-
-                ctx.fillStyle = '#FFFF00';
-                ctx.beginPath();
-                ctx.arc(rightEyeX, rightEyeY, eyeSize, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.fillStyle = '#000000';
-                ctx.beginPath();
-                ctx.arc(rightEyeX, rightEyeY, eyeSize / 2, 0, Math.PI * 2);
-                ctx.fill();
-
-                // Forked tongue
-                const tongueLen = 15;
-                const tongueFork = 8;
-                const tongueX = segment.x + Math.cos(snake.direction) * (cellSize / 2);
-                const tongueY = segment.y + Math.sin(snake.direction) * (cellSize / 2);
-
-                ctx.strokeStyle = '#FF0000';
-                ctx.lineWidth = 3;
-                ctx.lineCap = 'round';
-
-                // Main tongue
-                ctx.beginPath();
-                ctx.moveTo(tongueX, tongueY);
-                const tongueTipX = tongueX + Math.cos(snake.direction) * tongueLen;
-                const tongueTipY = tongueY + Math.sin(snake.direction) * tongueLen;
-                ctx.lineTo(tongueTipX, tongueTipY);
-                ctx.stroke();
-
-                // Fork left
-                ctx.beginPath();
-                ctx.moveTo(tongueTipX, tongueTipY);
-                ctx.lineTo(
-                    tongueTipX + Math.cos(snake.direction - 0.4) * tongueFork,
-                    tongueTipY + Math.sin(snake.direction - 0.4) * tongueFork
-                );
-                ctx.stroke();
-
-                // Fork right
-                ctx.beginPath();
-                ctx.moveTo(tongueTipX, tongueTipY);
-                ctx.lineTo(
-                    tongueTipX + Math.cos(snake.direction + 0.4) * tongueFork,
-                    tongueTipY + Math.sin(snake.direction + 0.4) * tongueFork
-                );
-                ctx.stroke();
-            }
-        });
-
-        // Draw health bar above snake
-        if (snake.health !== undefined && snake.max_health !== undefined) {
-            const barWidth = 150;
-            const barHeight = 12;
-            const barX = snake.x - barWidth / 2;
-            const barY = snake.y - snake.length / 2 - 30;
-
-            // Background
             ctx.fillStyle = '#333333';
             ctx.fillRect(barX, barY, barWidth, barHeight);
-
-            // Health
-            const healthPercent = snake.health / snake.max_health;
-            let healthColor = '#00FF00';
-            if (healthPercent < 0.3) healthColor = '#FF0000';
-            else if (healthPercent < 0.6) healthColor = '#FFAA00';
-
             ctx.fillStyle = healthColor;
             ctx.fillRect(barX, barY, barWidth * healthPercent, barHeight);
-
-            // Border
-            ctx.strokeStyle = '#FFD700';
-            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#FFD700'; ctx.lineWidth = 2;
             ctx.strokeRect(barX, barY, barWidth, barHeight);
-
-            // HP Text
-            ctx.fillStyle = '#FFFFFF';
-            ctx.font = 'bold 10px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText(`${snake.health}/${snake.max_health}`, snake.x, barY + barHeight / 2 + 3);
-
-            // "HUGE SNAKE" label
-            ctx.fillStyle = '#FFD700';
-            ctx.font = 'bold 12px Arial';
-            ctx.fillText('HUGE SNAKE', snake.x, barY - 5);
+            ctx.fillStyle = '#FFFFFF'; ctx.font = 'bold 10px Arial'; ctx.textAlign = 'center';
+            ctx.fillText(`${snakeData.health}/${snakeData.max_health}`, sx, barY + barHeight / 2 + 3);
+            ctx.fillStyle = '#FFD700'; ctx.font = 'bold 12px Arial';
+            ctx.fillText('HUGE SNAKE', sx, barY - 5);
         }
-
-        ctx.restore();
+    } else {
+        _snakeBodyCanvas = null; // Reset so next spawn rebuilds
     }
 
     // Draw supply drops (can be multiple)
@@ -2757,7 +2709,7 @@ function updateUI() {
                 const botIndicator = player.is_bot ? ' 🤖' : '';
                 leaderboardHTML += `
                     <div class="leaderboard-entry ${isMe ? 'my-entry' : ''}" style="border-left: 3px solid #FF0000;">
-                        <span class="player-name" style="color: ${player.color}">${player.name}${botIndicator}</span>
+                        <span class="player-name" style="color: ${escapeHtml(player.color)}">${escapeHtml(player.name)}${botIndicator}</span>
                         <span class="player-score">${player.kills} kills</span>
                     </div>
                 `;
@@ -2772,7 +2724,7 @@ function updateUI() {
                 const botIndicator = player.is_bot ? ' 🤖' : '';
                 leaderboardHTML += `
                     <div class="leaderboard-entry ${isMe ? 'my-entry' : ''}" style="border-left: 3px solid #0000FF;">
-                        <span class="player-name" style="color: ${player.color}">${player.name}${botIndicator}</span>
+                        <span class="player-name" style="color: ${escapeHtml(player.color)}">${escapeHtml(player.name)}${botIndicator}</span>
                         <span class="player-score">${player.kills} kills</span>
                     </div>
                 `;
@@ -2791,12 +2743,12 @@ function updateUI() {
         } else {
             leaderboard.innerHTML = sortedPlayers.map((player, index) => {
                 const isMe = player.id === myPlayerId;
-                const statusIcon = player.alive ? '' : '';
+                const statusIcon = player.alive ? '🟢' : '💀';
                 const botIndicator = player.is_bot ? ' 🤖' : '';
                 return `
                     <div class="leaderboard-entry ${isMe ? 'my-entry' : ''}">
                         <span class="rank">#${index + 1}</span>
-                        <span class="player-name" style="color: ${player.color}">${player.name}${botIndicator}</span>
+                        <span class="player-name" style="color: ${escapeHtml(player.color)}">${escapeHtml(player.name)}${botIndicator}</span>
                         <span class="player-score">${player.score} ${statusIcon}</span>
                     </div>
                 `;
@@ -2841,7 +2793,7 @@ function rafLoop(ts) {
     updateParticles(dt);
     if (myPlayerId !== null) {
         lerpRenderPositions(dt);
-        draw();
+        draw(ts);
     }
     requestAnimationFrame(rafLoop);
 }

@@ -11,6 +11,7 @@ monkey.patch_all()
 # Now import everything else
 import os
 import random
+import re
 import time
 import math
 import logging
@@ -30,6 +31,8 @@ logging.getLogger('gevent').setLevel(logging.ERROR)
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'tank_battle_secret_key_2024')
+if not os.environ.get('SECRET_KEY'):
+    logging.warning('SECRET_KEY not set — using insecure default. Set the SECRET_KEY env var in production.')
 
 # Enable CORS for all routes and origins
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -101,6 +104,7 @@ players: Dict[str, dict] = {}
 bullets: List[dict] = []
 terrain: List[dict] = []
 terrain_ramparts: List[dict] = []  # Cached subset — ramparts only (for collision)
+terrain_rampart_rects: List[tuple] = []  # Precomputed (x1,y1,x2,y2) tuples for fast AABB
 terrain_bushes: List[dict] = []    # Cached subset — bushes only (for visibility)
 supply_drops: List[dict] = []  # Current supply drops on map (up to 2)
 last_supply_drop_time: float = 0  # Last time supply drops spawned
@@ -967,19 +971,21 @@ def generate_terrain(map_type: str = None, game_mode: str = None):
     terrain_generated = True
 
     # Rebuild pre-split terrain caches
-    global terrain_ramparts, terrain_bushes
+    global terrain_ramparts, terrain_rampart_rects, terrain_bushes
     terrain_ramparts = [obj for obj in terrain if obj['type'] == 'rampart']
+    terrain_rampart_rects = [
+        (obj['x'], obj['y'], obj['x'] + obj['width'], obj['y'] + obj['height'])
+        for obj in terrain_ramparts
+    ]
     terrain_bushes = [obj for obj in terrain if obj['type'] == 'bush']
 
 
 def check_terrain_collision(x: float, y: float, width: float, height: float) -> bool:
     """Check if a rectangle collides with ramparts (bushes don't block movement)"""
-    for obj in terrain_ramparts:
-        # AABB collision detection
-        if (x < obj['x'] + obj['width'] and
-            x + width > obj['x'] and
-            y < obj['y'] + obj['height'] and
-            y + height > obj['y']):
+    x2 = x + width
+    y2 = y + height
+    for rx1, ry1, rx2, ry2 in terrain_rampart_rects:
+        if x < rx2 and x2 > rx1 and y < ry2 and y2 > ry1:
             return True
     return False
 
@@ -2109,7 +2115,7 @@ def update_bot_ai(bot: dict):
     # Shooting AI - shoot randomly
     bot['shoot_timer'] += 1
 
-    if bot['shoot_timer'] >= BOT_SHOOT_INTERVAL and bot['shoot_cooldown'] == 0:
+    if bot['shoot_timer'] >= BOT_SHOOT_INTERVAL and bot['shoot_cooldown'] <= 0:
         bot['shoot_timer'] = 0
 
         # Fire bullet (stacking: same logic as human)
@@ -2652,8 +2658,10 @@ def game_loop():
     global game_running, last_super_drop_time, snake, last_snake_time, shield_drop, last_shield_drop_time, atomic_bomb, last_atomic_bomb_time, last_bomb_gone_time, current_captain_id, last_captain_time, last_captain_target_time, tick_count
     game_running = True
     tick_count = 0
+    _tick_interval = 1.0 / GAME_TICK_RATE
 
     while game_running:
+        _tick_start = time.monotonic()
         tick_count += 1
         if players or bullets:
             # Cache current time for this tick (called many times, so cache it)
@@ -2959,8 +2967,11 @@ def game_loop():
             if tick_count % 2 == 0:
                 socketio.emit('game_state', game_state, namespace='/')
 
-        # Sleep to maintain tick rate
-        gevent.sleep(1.0 / GAME_TICK_RATE)
+        # Fixed-rate sleep: subtract processing time so tick rate stays accurate
+        _elapsed = time.monotonic() - _tick_start
+        _sleep = _tick_interval - _elapsed
+        if _sleep > 0:
+            gevent.sleep(_sleep)
 
 
 @app.route('/')
@@ -3017,10 +3028,12 @@ def handle_join_game(data):
         global terrain_generated
 
         player_id = request.sid
-        player_name = data.get('name', f'Tank{len(players) + 1}')
+        raw_name = data.get('name', '') or ''
+        player_name = raw_name.strip()[:30] or f'Tank{len(players) + 1}'
         game_mode_choice = data.get('game_mode', 'ffa')  # Get player's game mode choice
         map_choice = data.get('map_type', 'advanced')  # Get player's map choice
-        player_color = data.get('color', None)  # Get custom color
+        raw_color = data.get('color', None)
+        player_color = raw_color if (raw_color and re.match(r'^#[0-9a-fA-F]{6}$', str(raw_color))) else None
         player_tank_class = data.get('tank_class', 'gun')
         # Tank class is authoritative: it determines the ultimate skill
         CLASS_TO_SKILL = {
@@ -3114,7 +3127,7 @@ def handle_rotate(data):
 
     if player_id in players and players[player_id]['alive']:
         angle = data.get('angle')
-        if angle is not None:
+        if angle is not None and isinstance(angle, (int, float)) and math.isfinite(angle):
             players[player_id]['angle'] = angle
 
 
@@ -3126,7 +3139,7 @@ def handle_shoot():
     if player_id in players:
         tank = players[player_id]
 
-        if tank['alive'] and tank['shoot_cooldown'] == 0:
+        if tank['alive'] and tank['shoot_cooldown'] <= 0:
             # Transformer cannot shoot — melee only
             if tank['skill_active'] and tank['skill'] == 'transformer':
                 return
